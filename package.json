@@ -1,0 +1,48 @@
+{
+  "name": "glintab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first browser reading companion",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build && node scripts/verify-package.mjs",
+    "zip": "wxt zip && node scripts/verify-package.mjs",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node scripts/e2e.mjs",
+    "format": "prettier --write entrypoints components lib types config tests scripts assets docs README.md AGENTS.md '*.{json,ts}' .github/workflows/ci.yml",
+    "format:check": "prettier --check entrypoints components lib types config tests scripts assets docs README.md AGENTS.md '*.{json,ts}' .github/workflows/ci.yml",
+    "postinstall": "wxt prepare",
+    "check": "npm run compile && npm test && npm run build"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.4.2",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/chrome": "^0.1.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/turndown": "^5.0.5",
+    "@wxt-dev/module-react": "^1.1.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12",
+    "wxt": "^0.21.3"
+  }
+}

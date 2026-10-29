@@ -1,0 +1,9 @@
+node_modules/
+.wxt/
+.output/
+output/
+coverage/
+.DS_Store
+*.local
+artifacts/
+output/

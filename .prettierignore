@@ -1,0 +1,7 @@
+node_modules
+.output
+output
+.wxt
+artifacts
+package-lock.json
+REBUILD_GUIDE_ZH.md
