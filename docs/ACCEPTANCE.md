@@ -7,11 +7,11 @@
 | 检查                   | 结果                                                           |
 | ---------------------- | -------------------------------------------------------------- |
 | `npm run compile`      | 通过，TypeScript strict / noUncheckedIndexedAccess             |
-| `npm test`             | 9 个测试文件，52 项测试通过                                    |
+| `npm test`             | 10 个测试文件，56 项测试通过                                   |
 | `npm run build`        | 生产构建通过，生成可安装 MV3 目录                              |
 | Manifest 与资源校验    | 通过；无默认全站 host 权限，无全站自动内容脚本，图标和入口完整 |
 | `npm run format:check` | 通过                                                           |
-| `npm run test:e2e`     | 正式版 16 个阅读场景及纯扩展 OAuth 链路通过                    |
+| `npm run test:e2e`     | 正式版 18 个阅读场景及纯扩展 OAuth 链路通过                    |
 | `npm run test:e2e:dev` | 开发版 16 个真实 Chromium 场景通过，自动启动隔离 WXT 服务      |
 | `npm run zip`          | 已生成 `output/glintab-0.1.0-chrome.zip`                       |
 | 安装依赖审计           | 最近一次 npm 安装审计结果为 0 漏洞                             |
@@ -38,10 +38,14 @@
 14. 故意移除临时测试副本中的 Worker 文件，面板显示任务引擎错误，界面仍可用。
 15. 280px 对话面板、360px 设置页无横向页面溢出。
 16. 所有验收页面无未捕获 JavaScript 异常，也没有页面渲染进程崩溃。
+17. 未授予权限的测试域名触发真实浏览器注入拒绝，面板显示「一次授权所有网站」和「仅授权当前网站」；重复发送可恢复，输入问题保留。
+18. 移除临时扩展副本中的正文脚本时，明确提示重新加载扩展，不显示网站授权按钮。
 
 测试只对临时副本添加回环地址权限，便于非交互 CI 验收。生产 Manifest 继续使用可选站点授权。各测试标签页在抽屉鼠标检查前使用同一视口，避免测试浏览器中已复现的跨标签页视口覆盖导致 iframe 输入路由异常。
 
 机器结果和界面截图：`artifacts/e2e-results.json`、`artifacts/panel-empty.png`、`artifacts/panel-answer.png`、`artifacts/drawer-open.png`、`artifacts/settings-configured.png`。这些是本地验收输出，不纳入源码版本管理；CI 配置会上传验收产物。
+
+全站授权回归：行为测试验证一次点击申请 `http://*/*` 与 `https://*/*` 两项可选权限，保留按站授权及拒绝处理，不修改默认 Manifest 权限。浏览器测试验证真实未授权路径和脚本加载失败路径；全站权限弹窗的允许、拒绝与浏览器重启后的保留仍需日常 Chrome 人工检查。
 
 开发模式的同一套场景结果在 `artifacts/development/e2e-results.json`，截图也单独保存在该目录。测试使用真实 WXT serve 模式，不用 `build --mode development` 代替；自动服务使用临时输出和独立端口，不覆盖用户的开发产物。
 

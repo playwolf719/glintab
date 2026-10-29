@@ -1,7 +1,7 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { Repository } from '../lib/storage/repository';
 import { errorText } from '../lib/platform/rpc';
-import { providerOrigin } from '../lib/platform/permissions';
+import { extractionInjectionError, providerOrigin } from '../lib/platform/permissions';
 import { isReadableUrl, pageKey } from '../lib/domain/page';
 import { extractorFor } from '../lib/extraction/registry';
 import { listModels } from '../lib/llm/client';
@@ -151,12 +151,12 @@ export default defineBackground(() => {
       pendingExtractions.set(tabId, { expected, resolve, reject, timer });
       void chrome.scripting
         .executeScript({ target: { tabId }, files: [adapter.script.replace(/^\//, '')] })
-        .catch(() => {
+        .catch((error) => {
           const pending = pendingExtractions.get(tabId);
           if (pending) {
             clearTimeout(pending.timer);
             pendingExtractions.delete(tabId);
-            reject(new Error('无法读取此站点。请授权当前网站后重试。'));
+            reject(new Error(extractionInjectionError(error)));
           }
         });
     });

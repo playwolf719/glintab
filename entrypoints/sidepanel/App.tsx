@@ -22,6 +22,7 @@ import { Message } from '../../components/chat/Message';
 import { ContentDialog } from '../../components/chat/ContentDialog';
 import { errorText, rpc } from '../../lib/platform/rpc';
 import { isReadableUrl, pageKey } from '../../lib/domain/page';
+import { PAGE_ACCESS_DECLINED, PAGE_ACCESS_REQUIRED } from '../../lib/platform/permissions';
 
 export default function App() {
   const { config, loaded, error: configError } = useConfig();
@@ -159,10 +160,15 @@ export default function App() {
         </IconButton>
       </div>
       <ErrorBanner message={chat.error || configError} onClose={() => chat.setError('')} />
-      {chat.error.includes('授权') || chat.error.includes('无法读取此站点') ? (
-        <button className="permission-action" onClick={() => void chat.authorize()}>
-          授权当前网站，保留问题后重试
-        </button>
+      {[PAGE_ACCESS_REQUIRED, PAGE_ACCESS_DECLINED].includes(chat.error) ? (
+        <>
+          <button className="permission-action" onClick={() => void chat.authorize(true)}>
+            一次授权所有网站
+          </button>
+          <button className="permission-action" onClick={() => void chat.authorize(false)}>
+            仅授权当前网站
+          </button>
+        </>
       ) : null}
       <main
         className="chat-scroll"

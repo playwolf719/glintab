@@ -188,6 +188,45 @@ try {
     await panel.keyboard.press('Escape');
     await expect(panel.getByRole('dialog')).toHaveCount(0);
   });
+  await step(
+    'ungranted sites offer one-time all-sites access and preserve the question',
+    async () => {
+      const url = 'http://ungranted.test/article';
+      await context.route(url, (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: '<html><title>Permission test</title><body><article>Permission test</article></body></html>',
+        }),
+      );
+      const ungranted = await context.newPage();
+      await ungranted.goto(url);
+      const sourceTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        url,
+      );
+      const deniedPanel = await openPanel(sourceTabId);
+      await expect(deniedPanel.getByRole('button', { name: '帮我总结这篇网页' })).toBeEnabled();
+      await deniedPanel.getByRole('textbox', { name: '向当前网页提问' }).fill('Keep my question');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await deniedPanel.getByRole('button', { name: '发送问题' }).click();
+        await expect(deniedPanel.getByRole('alert')).toContainText('尚未获得此网站的读取权限');
+        await expect(
+          deniedPanel.getByRole('button', { name: '一次授权所有网站', exact: true }),
+        ).toBeVisible();
+        await expect(
+          deniedPanel.getByRole('button', { name: '仅授权当前网站', exact: true }),
+        ).toBeVisible();
+        await expect(deniedPanel.getByRole('textbox', { name: '向当前网页提问' })).toHaveValue(
+          'Keep my question',
+        );
+        await expect(deniedPanel.getByRole('button', { name: '发送问题' })).toBeEnabled();
+      }
+      await deniedPanel.close();
+      await ungranted.close();
+      await context.unroute(url);
+      await panel.bringToFront();
+    },
+  );
   await step('follow-up reuses source and editing replaces its previous answer', async () => {
     await panel
       .getByRole('textbox', { name: '向当前网页提问' })
@@ -352,6 +391,31 @@ try {
       },
     );
   }
+  await step('missing extraction scripts do not incorrectly ask for site permission', async () => {
+    const scriptPath = path.join(extensionPath, 'content-scripts/extract.js');
+    const script = await readFile(scriptPath);
+    const source = await context.newPage();
+    let brokenPanel;
+    try {
+      await source.goto(`${baseUrl}/broken-extraction`);
+      const sourceTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        source.url(),
+      );
+      brokenPanel = await openPanel(sourceTabId);
+      await expect(brokenPanel.getByRole('button', { name: '帮我总结这篇网页' })).toBeEnabled();
+      await rm(scriptPath);
+      await brokenPanel.getByRole('button', { name: '帮我总结这篇网页' }).click();
+      await expect(brokenPanel.getByRole('alert')).toContainText('正文脚本注入失败');
+      await expect(
+        brokenPanel.getByRole('button', { name: '一次授权所有网站', exact: true }),
+      ).toHaveCount(0);
+    } finally {
+      await writeFile(scriptPath, script);
+      await brokenPanel?.close();
+      await source.close();
+    }
+  });
   await step(
     'deleting current provider falls back and clearing data updates every panel',
     async () => {

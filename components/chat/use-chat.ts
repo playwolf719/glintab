@@ -3,6 +3,7 @@ import type { Conversation, EngineEvent, PageSource, Settings, TaskSnapshot } fr
 import { pageKey } from '../../lib/domain/page';
 import { isCurrentSnapshot } from '../../lib/domain/task-events';
 import { rpc, errorText } from '../../lib/platform/rpc';
+import { grantPageAccess } from '../../lib/platform/permissions';
 
 export function useChat(settings: Settings) {
   const params = new URLSearchParams(location.search);
@@ -202,16 +203,14 @@ export function useChat(settings: Settings) {
       setError(errorText(e));
     }
   }
-  async function authorize() {
+  async function authorize(allSites: boolean) {
     if (!tab?.url) return;
+    const expected = identity.current;
     try {
-      const granted = await chrome.permissions.request({
-        origins: [`${new URL(tab.url).origin}/*`],
-      });
-      if (!granted) throw new Error('未获得当前站点权限，问题已保留，可再次授权后发送。');
-      setError('');
+      await grantPageAccess(tab.url, allSites);
+      if (mounted.current && identity.current === expected) setError('');
     } catch (e) {
-      setError(errorText(e));
+      if (mounted.current && identity.current === expected) setError(errorText(e));
     }
   }
   return {
