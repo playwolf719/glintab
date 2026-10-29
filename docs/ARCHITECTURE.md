@@ -10,6 +10,7 @@ entrypoints/
   drawer.content.ts    closed Shadow DOM 宿主、扩展 iframe、宽度拖动
   extract.content.ts   按需注入，一次性提取当前页面
   offscreen/           Chrome runtime 与专用 Worker 之间的消息桥
+  engine-worker.ts     独立打包的扩展内 Worker 入口，开发与生产共用
   sidepanel/           抽屉、原生侧栏、独立窗口共用的 React 界面
   options/             独立设置页
 components/
@@ -17,6 +18,7 @@ components/
   providers/           供应商表单、导入交互
   ui/                  品牌、错误提示、对话框等基本组件
 lib/
+  auth/                PKCE、身份验证、授权状态机和令牌刷新
   domain/              URL 规范化、上下文预算等无浏览器依赖规则
   extraction/          Readability + Markdown、提取器注册表
   engine/              独立 Worker 和可注入依赖的 TaskManager
@@ -51,6 +53,8 @@ flowchart LR
 ```
 
 Offscreen 使用 Chrome 的 `WORKERS` reason，确实创建独立 Worker；模型网络任务在 Worker 执行，不依赖 React 页面存活。Offscreen 仅使用 `chrome.runtime`，不会直接调用不支持的 storage API。
+
+Worker 使用 WXT unlisted script 单独构建，通过 `chrome.runtime.getURL('/engine-worker.js')` 创建。不要使用基于 `import.meta.url` 的 Vite Worker 路径：在开发服务中它会指向 HTTP 资源，与扩展源不同，已在浏览器中复现其导致侧栏渲染进程崩溃。Worker 初始化失败会返回明确错误，不让面板持续加载。`test:e2e:dev` 使用隔离开发服务验证这条链路，CI 同时覆盖开发和生产模式。
 
 ### 身份分离
 
@@ -101,6 +105,14 @@ Offscreen 使用 Chrome 的 `WORKERS` reason，确实创建独立 Worker；模�
 - 模型压缩：在 `buildContext` 前加可替换的历史压缩服务；压缩失败仍执行最终预算判断，记录压缩元数据。
 
 ## 安全和权限边界
+
+ChatGPT 授权由 `lib/auth/` 管理，background 只协调浏览器标签页与导航事件。固定登录标签页与精确回调 origin / port / path，并校验 state、PKCE、nonce 与 ID-token 签名；不要求 localhost 监听器。导航事件捕获回调，状态查询以 pendingUrl / url 兜底。回调的授权码先标记已消费，再交换令牌，避免重复事件复用。
+
+`Repository(chrome.storage.local)` 独占 `chatgpt-auth:<id>` 凭证写入；`Repository(chrome.storage.session)` 保存短期登录流程与 PKCE，支持后台重启，浏览器退出后不保留未完成流程。后台重启遇到交换中的流程会要求重新登录，不重复消费授权码。配置只保存连接 ID / email；界面、任务快照和广播事件不携带令牌。过期未保存的连接会清理，已保存记录在恢复时保留。
+
+模型列表在后台请求，Codex 目录单独附加 `client_version` 查询参数，兼容版本集中在 `config/chatgpt.ts`；普通 API Key 模型列表保持原有路径。目录失败与登录失败分别显示，保留已授权连接供重试或手动选择模型。生成仍在 offscreen 专用 Worker 中执行。Worker 经 offscreen 的专用 `glintab:auth` 通道向后台取得短期 access token 和账号 ID，后台仅接受自己的 offscreen 页面，并检查连接仍在已保存配置中。刷新令牌始终不进入 Worker。请求固定到 Codex 后端，禁用 HTTP 重定向，使用账号 header、store:false / stream:true。API Key 模式继续访问用户配置的端点。
+
+每个连接串行执行刷新、重连与删除，401 按凭证 revision 去重并最多重试一次。刷新前先持久化失效标记，成功后原子替换整组凭证；若后台中断或新凭证保存失败，要求重新登录，避免再次使用已轮换的 refresh token。停止任务可以立即结束等待凭证的操作，共享刷新仍负责完成持久化。删除连接仅清理本地凭证，不声称已撤销远程授权。
 
 - 没有默认全站读取权限；内容脚本的 `matches: []` 是有意选择，避免 WXT 为 runtime 内容脚本自动添加全站 host 权限。由用户点击的 `activeTab` 或显式可选站点授权注入。
 - RPC 仅接受本扩展的 sidepanel/options 页面；提取和宽度等有限通道仅接受自己的主框架内容脚本。引擎事件只接受 offscreen，任务命令只接受后台。

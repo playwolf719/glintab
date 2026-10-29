@@ -149,3 +149,149 @@ describe('model protocols', () => {
     );
   });
 });
+
+it('uses direct ChatGPT account credentials, stateless input and one 401 refresh retry', async () => {
+  const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');
+  const credentials = vi
+    .fn()
+    .mockResolvedValueOnce({ accessToken: 'old', accountId: 'account', revision: 'r1' })
+    .mockResolvedValueOnce({ accessToken: 'new', accountId: 'account', revision: 'r2' });
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response('', { status: 401 }))
+    .mockResolvedValueOnce(
+      sse([{ type: 'response.output_text.delta', delta: 'ok' }, { type: 'response.completed' }]),
+    );
+  await streamCompletion(
+    {
+      ...provider,
+      authType: 'chatgpt',
+      apiFormat: 'openai_responses',
+      baseUrl: CHATGPT_PROVIDER_URL,
+      apiKey: '',
+      chatgpt: { connectionId: 'id', email: '' },
+    },
+    'instructions',
+    [{ role: 'user', content: 'question' }],
+    100,
+    signal,
+    vi.fn(),
+    fetcher,
+    credentials,
+  );
+  expect(credentials.mock.calls).toEqual([[], ['r1']]);
+  expect(fetcher.mock.calls[1]![0]).toBe(CHATGPT_PROVIDER_URL + '/responses');
+  const request = fetcher.mock.calls[1]![1]!;
+  expect(request.headers).toMatchObject({
+    Authorization: 'Bearer new',
+    'ChatGPT-Account-Id': 'account',
+  });
+  expect(request.redirect).toBe('error');
+  expect(JSON.parse(String(request.body))).toEqual({
+    model: provider.model,
+    instructions: 'instructions',
+    store: false,
+    stream: true,
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'question' }] }],
+  });
+});
+it('stops immediately while account credentials are refreshing', async () => {
+  const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');
+  const controller = new AbortController();
+  let release!: (value: import('../types').ChatGPTCredentials) => void;
+  const credentials = () =>
+    new Promise<import('../types').ChatGPTCredentials>((resolve) => {
+      release = resolve;
+    });
+  const fetcher = vi.fn<typeof fetch>();
+  const result = streamCompletion(
+    {
+      ...provider,
+      authType: 'chatgpt',
+      apiFormat: 'openai_responses',
+      baseUrl: CHATGPT_PROVIDER_URL,
+      chatgpt: { connectionId: 'id', email: '' },
+    },
+    '',
+    [],
+    100,
+    controller.signal,
+    vi.fn(),
+    fetcher,
+    credentials,
+  );
+  controller.abort();
+  await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+  release({ accessToken: 'unused', accountId: 'account', revision: 'r' });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it('loads the Codex model catalog with a client_version query and account credentials', async () => {
+  const { listModels } = await import('../lib/llm/client');
+  const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(String(input));
+    if (!/^\d+\.\d+\.\d+$/.test(url.searchParams.get('client_version') || ''))
+      return Response.json(
+        { detail: [{ loc: ['query', 'client_version'], type: 'missing' }] },
+        { status: 400 },
+      );
+    expect(url.origin + url.pathname).toBe(CHATGPT_PROVIDER_URL + '/models');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer catalog-token');
+    expect(new Headers(init?.headers).get('ChatGPT-Account-Id')).toBe('catalog-account');
+    return Response.json({
+      models: [
+        { slug: 'available-model', visibility: 'list' },
+        { slug: 'internal-model', visibility: 'hide' },
+      ],
+    });
+  });
+  const result = await listModels(
+    {
+      ...provider,
+      authType: 'chatgpt',
+      apiFormat: 'openai_responses',
+      baseUrl: CHATGPT_PROVIDER_URL,
+      apiKey: '',
+      chatgpt: { connectionId: 'id', email: '' },
+    },
+    fetcher,
+    async () => ({ accessToken: 'catalog-token', accountId: 'catalog-account', revision: 'r' }),
+  );
+  expect(result).toEqual(['available-model']);
+});
+
+it('reports a catalog HTTP failure without leaking response bodies or requesting a new login', async () => {
+  const { listModels } = await import('../lib/llm/client');
+  const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(new Response('secret-bearing server body', { status: 400 }));
+  const credentials = vi
+    .fn()
+    .mockResolvedValue({ accessToken: 'token', accountId: 'account', revision: 'r' });
+  const result = listModels(
+    {
+      ...provider,
+      authType: 'chatgpt',
+      baseUrl: CHATGPT_PROVIDER_URL,
+      chatgpt: { connectionId: 'id', email: '' },
+    },
+    fetcher,
+    credentials,
+  );
+  const error = await result.catch((value: Error) => value);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain('模型列表请求失败（HTTP 400）');
+  expect((error as Error).message).not.toContain('secret-bearing');
+  expect((error as Error).message).not.toContain('重新登录');
+  expect(credentials).toHaveBeenCalledTimes(1);
+});
+it('keeps ordinary API Key discovery at the configured models path', async () => {
+  const { listModels } = await import('../lib/llm/client');
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(Response.json({ data: [{ id: 'ordinary-model' }] }));
+  expect(await listModels(provider, fetcher)).toEqual(['ordinary-model']);
+  expect(fetcher.mock.calls[0]![0]).toBe('https://example.com/v1/models');
+});

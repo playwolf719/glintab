@@ -1,6 +1,6 @@
 # Glintab
 
-中文优先、使用自备 API Key 的 Chrome 网页阅读助手。基于 [REBUILD_GUIDE_ZH.md](REBUILD_GUIDE_ZH.md) 独立实现，以可安装的第一版为交付范围，保留清晰的模块边界，便于继续加入视频字幕、引用和笔记功能。
+中文优先、支持 API Key 和 ChatGPT 账号授权的 Chrome 网页阅读助手。基于 [REBUILD_GUIDE_ZH.md](REBUILD_GUIDE_ZH.md) 独立实现，以可安装的第一版为交付范围，保留清晰的模块边界，便于继续加入视频字幕、引用和笔记功能。
 
 ## 安装使用
 
@@ -33,6 +33,14 @@ npm run zip
 
 导入支持 Claude Code settings JSON、Codex API Key JSON / provider TOML、OpenCode JSON 和通用 JSON。仅保存解析后的必要字段，不保存配置原文。不读取本机隐藏目录，不支持 OAuth 令牌导入。
 
+### 使用 ChatGPT 账号
+
+在插件的「添加供应商」中选择「ChatGPT 账号登录」，点击「使用 ChatGPT 登录」，允许访问授权和模型域名。在新标签页完成 OpenAI 授权后，扩展会自动捕获回调、交换并保存凭证。回到插件选择模型，再点击「保存连接」。**无需启动本机服务或保持终端运行。**
+
+这是 Codex 兼容接入，使用 ChatGPT 账号授权及 Codex Responses 后端，与 API Key 模式、OpenAI 动态注册 OSS 客户端流程不同。真实账号的授权、回调地址接受情况、模型权限及地区策略仍需用户联调；自动测试使用模拟身份，不代表真实平台已验收。
+
+令牌由后台 Repository 保存到浏览器扩展本地存储，未加密；配置和界面只持有连接 ID 与账号显示信息。使用时自动刷新，401 后最多刷新并重试一次。不读取或改写 Codex 的凭证文件，也不需要手动生成或粘贴 `auth.json` / `config.toml`。删除连接会移除此浏览器的凭证，远程授权需在 OpenAI 账号设置中管理。详见 [ChatGPT 登录说明](docs/CHATGPT_LOGIN.md)。
+
 ## 第一版能力
 
 - 网页右侧抽屉，支持拖拽宽度、双击恢复、关闭；受限页使用原生侧栏，亦可弹出独立窗口。
@@ -52,7 +60,7 @@ npm run zip
 本版完成文档 A / B 的主要能力及 C 的协议与配置接入，**不是全文列出的所有功能都已实现**。
 
 - 不支持 YouTube / B 站字幕提取和视频时间戳；视频专用页会明确提示，不把页面导航当作字幕。
-- 暂不提供 OAuth、自动令牌刷新、云同步、知识库、OCR、通用 PDF 阅读。
+- 暂不提供其他平台 OAuth、云同步、知识库、OCR、通用 PDF 阅读。ChatGPT 为纯扩展的 Codex 兼容授权接入。
 - 界面为中文；回答可选中文、英文、跟随正文。
 - 暂不提供固定后全站自动展开、跨页自动恢复抽屉、主题切换和独立历史管理页。导航后可再次点击工具栏打开。
 - 不调用模型压缩历史，使用确定性的预算缩减；系统会提示，提取内容查看器仍显示缓存原文。
@@ -74,8 +82,11 @@ npm run format       # 统一格式
 # 浏览器集成测试：先构建，再安装隔离的测试浏览器
 npx playwright install chromium
 npm run test:e2e
+npm run test:e2e:dev # 自动启动隔离的 WXT 开发服务，验证真实开发模式
 ```
 
 `test:e2e` 启动回环地址上的模拟服务并使用临时 Chromium 配置，不连接个人浏览器、不调用付费模型。仅临时测试副本增加 `127.0.0.1` 主机权限；生产 Manifest 仍使用可选域名权限。该测试验证实际跨上下文链路，不覆盖真实权限弹窗的人工决策。截图和结果在 `artifacts/`。
+
+`test:e2e:dev` 会自动启动独立的开发服务并在结束后关闭，产物放在临时目录，不覆盖你正在使用的 `output/chrome-mv3-dev`。结果位于 `artifacts/development/`。任务 Worker 在开发和生产模式均通过扩展内的 `engine-worker.js` 加载，避免开发服务器的跨源 Worker 引起页面崩溃。修改 Worker 入口后，请在扩展管理页重新加载插件，并刷新原网页后再打开侧栏。
 
 更多说明见 [架构与扩展指南](docs/ARCHITECTURE.md)、[隐私说明](docs/PRIVACY.md)、[验收记录](docs/ACCEPTANCE.md) 和 [迭代路线](docs/ROADMAP.md)。

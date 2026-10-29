@@ -5,16 +5,25 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
+const development = process.argv.includes('--dev');
+const artifactPath = path.join(root, 'artifacts', ...(development ? ['development'] : []));
 const temporary = await mkdtemp(path.join(tmpdir(), 'glintab-e2e-'));
 const extensionPath = path.join(temporary, 'extension');
-await cp(path.join(root, 'output/chrome-mv3'), extensionPath, { recursive: true });
+await cp(
+  process.env.GLINTAB_E2E_EXTENSION_DIR ||
+    path.join(root, development ? 'output/chrome-mv3-dev' : 'output/chrome-mv3'),
+  extensionPath,
+  { recursive: true },
+);
 // Only this disposable test copy grants loopback access at install time.
 // Production retains optional host permissions and the real user consent flow.
 const manifestPath = path.join(extensionPath, 'manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-manifest.host_permissions = ['http://127.0.0.1/*'];
+manifest.host_permissions = [
+  ...new Set([...(manifest.host_permissions || []), 'http://127.0.0.1/*']),
+];
 await writeFile(manifestPath, JSON.stringify(manifest));
-await mkdir(path.join(root, 'artifacts'), { recursive: true });
+await mkdir(artifactPath, { recursive: true });
 const requests = [];
 const timers = new Set();
 const server = createServer(async (req, res) => {
@@ -95,6 +104,7 @@ await new Promise((resolve, reject) => {
 const baseUrl = `http://127.0.0.1:${server.address().port}`;
 let context;
 const failures = [];
+const errors = [];
 const passed = [];
 async function step(name, run) {
   console.log(`CHECK ${name}`);
@@ -106,7 +116,7 @@ async function capture(page, filename, fullPage = false) {
   await page.bringToFront();
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await page.screenshot({ path: path.join(root, 'artifacts', filename), fullPage });
+      await page.screenshot({ path: path.join(artifactPath, filename), fullPage });
       return;
     } catch (error) {
       if (attempt === 2) throw error;
@@ -126,8 +136,14 @@ try {
   const worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
   const extensionId = new URL(worker.url()).host;
   const extensionUrl = `chrome-extension://${extensionId}`;
-  const errors = [];
-  context.on('page', (page) => page.on('pageerror', (error) => errors.push(error.message)));
+  context.on('page', (page) =>
+    page
+      .on('crash', () => errors.push('页面渲染进程崩溃'))
+      .on('pageerror', (error) => {
+        errors.push(error.message);
+        console.error('BROWSER ERROR', error.message);
+      }),
+  );
   const options = await context.newPage();
   await options.goto(`${extensionUrl}/options.html`);
   await step('settings empty state and real provider form', async () => {
@@ -269,7 +285,7 @@ try {
         embeddedElement.evaluate((element) => element.getBoundingClientRect().left >= innerWidth),
       )
       .toBe(true);
-    await article.screenshot({ path: path.join(root, 'artifacts/drawer-closed.png') });
+    await article.screenshot({ path: path.join(artifactPath, 'drawer-closed.png') });
   });
   await step('HTTP errors are visible and do not leave generation stuck', async () => {
     await panel.getByRole('textbox', { name: '向当前网页提问' }).fill('ERROR_429');
@@ -357,6 +373,16 @@ try {
       expect(stored).toEqual({});
     },
   );
+  await step('worker startup failures show an error without crashing the panel', async () => {
+    // The clear-data scenario above closed the previous engine. Break only this
+    // disposable extension copy, then verify the actual offscreen error path.
+    await rm(path.join(extensionPath, 'engine-worker.js'));
+    const brokenPanel = await openPanel();
+    await expect(brokenPanel.getByRole('alert')).toContainText('任务引擎', { timeout: 10000 });
+    await expect(brokenPanel.getByRole('heading', { name: '每一页，都读得更深。' })).toBeVisible();
+    await expect(brokenPanel.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+    await brokenPanel.close();
+  });
   await step('narrow layouts have no horizontal page overflow', async () => {
     await panel.setViewportSize({ width: 280, height: 700 });
     await options.setViewportSize({ width: 360, height: 780 });
@@ -371,10 +397,11 @@ try {
     expect(errors).toEqual([]);
   });
   await writeFile(
-    path.join(root, 'artifacts/e2e-results.json'),
+    path.join(artifactPath, 'e2e-results.json'),
     JSON.stringify(
       {
         browser: context.browser()?.version(),
+        mode: development ? 'development' : 'production',
         passed,
         requests: requests.length,
         failures,
@@ -386,15 +413,16 @@ try {
   );
   console.log(`Validated ${passed.length} browser scenarios.`);
 } catch (error) {
+  console.error('PAGE ERRORS', errors);
   failures.push(String(error));
   await writeFile(
-    path.join(root, 'artifacts/e2e-results.json'),
+    path.join(artifactPath, 'e2e-results.json'),
     JSON.stringify({ passed, failures }, null, 2),
   );
   if (context)
     for (const [index, page] of context.pages().entries()) {
       await page
-        .screenshot({ path: path.join(root, `artifacts/failure-${index}.png`) })
+        .screenshot({ path: path.join(artifactPath, `failure-${index}.png`) })
         .catch(() => {});
       console.error(
         'PAGE',

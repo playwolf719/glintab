@@ -6,4 +6,6 @@ coverage/
 .DS_Store
 *.local
 artifacts/
+.glintab/
 output/
+tmp/

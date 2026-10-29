@@ -1,5 +1,7 @@
 export type ApiFormat = 'openai_chat' | 'anthropic' | 'openai_responses';
 export interface Provider {
+  authType?: 'api_key' | 'chatgpt';
+  chatgpt?: { connectionId: string; email: string; draftKey?: string };
   id: string;
   name: string;
   baseUrl: string;
@@ -70,6 +72,10 @@ export interface EngineEvent {
   persist: boolean;
 }
 export type Request =
+  | { type: 'chatgpt:login:start'; providerId?: string }
+  | { type: 'chatgpt:login:status'; flowId: string; statusKey: string }
+  | { type: 'chatgpt:login:cancel'; flowId: string; statusKey: string }
+  | { type: 'chatgpt:connection:discard'; connectionId: string; draftKey: string }
   | { type: 'config:get' }
   | { type: 'provider:save'; provider: Provider }
   | { type: 'provider:delete'; id: string }
@@ -101,4 +107,42 @@ export interface RpcResponse<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
+}
+
+// Private records are only read/written by background Repository instances.
+export interface ChatGPTAuthRecord {
+  version: 1;
+  id: string;
+  subject: string;
+  accountId: string;
+  email: string;
+  accessToken: string;
+  refreshToken: string;
+  idToken: string;
+  expiresAt: number;
+  revision: string;
+  invalid?: boolean;
+}
+export interface ChatGPTAuthFlow {
+  id: string;
+  statusKey: string;
+  state: string;
+  nonce: string;
+  verifier: string;
+  tabId: number;
+  expiresAt: number;
+  existingId?: string;
+  status: 'pending' | 'exchanging' | 'connected' | 'cancelled' | 'error';
+  connectionId?: string;
+  error?: string;
+}
+export interface ChatGPTCredentials {
+  accessToken: string;
+  accountId: string;
+  revision: string;
+}
+export interface AuthCredentialRequest {
+  channel: 'glintab:auth';
+  connectionId: string;
+  rejectedRevision?: string;
 }

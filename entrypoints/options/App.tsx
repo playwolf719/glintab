@@ -154,7 +154,7 @@ export default function App() {
                     </span>
                     <h2>连接第一个 AI 供应商</h2>
                     <p>
-                      支持 OpenAI 兼容服务、Anthropic 与本地模型。
+                      支持 ChatGPT 账号、OpenAI 兼容服务与本地模型。
                       <br />
                       几项配置，就能拥有你的网页阅读助手。
                     </p>
@@ -182,7 +182,11 @@ export default function App() {
                             )}
                           </div>
                           <span>{provider.model}</span>
-                          <small>{provider.baseUrl}</small>
+                          <small>
+                            {provider.authType === 'chatgpt'
+                              ? `ChatGPT 账号 · ${provider.chatgpt?.email || '已授权'}`
+                              : provider.baseUrl}
+                          </small>
                         </div>
                         <div className="provider-row-actions">
                           {config.currentProviderId !== provider.id && (
@@ -204,7 +208,13 @@ export default function App() {
                           <IconButton
                             label={`删除 ${provider.name}`}
                             onClick={() => {
-                              if (confirm(`删除「${provider.name}」及其本地 API Key？`))
+                              if (
+                                confirm(
+                                  provider.authType === 'chatgpt'
+                                    ? `断开「${provider.name}」并删除此浏览器保存的登录凭证？远程授权需在 OpenAI 账号设置中管理。`
+                                    : `删除「${provider.name}」及其本地 API Key？`,
+                                )
+                              )
                                 void action(
                                   () => rpc({ type: 'provider:delete', id: provider.id }),
                                   '供应商已删除',
@@ -341,12 +351,17 @@ export default function App() {
                 </p>
                 <p>
                   模型请求包含网页正文、标题、网址、问题及必要的历史。Glintab
-                  没有自建服务端、账号、遥测或云同步。密钥未加密，请仅在可信设备上使用。
+                  没有远程自建服务端、遥测或云同步。API Key 保存在插件本地；ChatGPT
+                  登录凭证由后台保存在此浏览器的扩展本地存储中，未加密。
                 </p>
                 <button
                   className="button danger"
                   onClick={() => {
-                    if (confirm('清除所有供应商、API Key、会话历史和设置？此操作无法撤销。'))
+                    if (
+                      confirm(
+                        '清除所有供应商、API Key、ChatGPT 登录凭证、会话历史和设置？远程授权不会自动撤销。此操作无法撤销。',
+                      )
+                    )
                       void action(() => rpc({ type: 'data:clear' }), '所有本地数据已清除');
                   }}
                 >

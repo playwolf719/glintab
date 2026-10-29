@@ -12,7 +12,9 @@ assert.equal(manifest.options_ui.open_in_tab, true);
 assert.equal(manifest.side_panel.default_path, 'sidepanel.html');
 for (const file of [
   'background.js',
+  'auth-complete.html',
   'offscreen.html',
+  'engine-worker.js',
   'options.html',
   'sidepanel.html',
   'content-scripts/drawer.js',

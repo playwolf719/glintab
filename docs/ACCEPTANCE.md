@@ -7,11 +7,12 @@
 | 检查                   | 结果                                                           |
 | ---------------------- | -------------------------------------------------------------- |
 | `npm run compile`      | 通过，TypeScript strict / noUncheckedIndexedAccess             |
-| `npm test`             | 8 个测试文件，32 项测试通过                                    |
+| `npm test`             | 9 个测试文件，52 项测试通过                                    |
 | `npm run build`        | 生产构建通过，生成可安装 MV3 目录                              |
 | Manifest 与资源校验    | 通过；无默认全站 host 权限，无全站自动内容脚本，图标和入口完整 |
 | `npm run format:check` | 通过                                                           |
-| `npm run test:e2e`     | 15 个真实 Chromium 场景通过                                    |
+| `npm run test:e2e`     | 正式版 16 个阅读场景及纯扩展 OAuth 链路通过                    |
+| `npm run test:e2e:dev` | 开发版 16 个真实 Chromium 场景通过，自动启动隔离 WXT 服务      |
 | `npm run zip`          | 已生成 `output/glintab-0.1.0-chrome.zip`                       |
 | 安装依赖审计           | 最近一次 npm 安装审计结果为 0 漏洞                             |
 
@@ -34,12 +35,31 @@
 11. Responses 协议经过完整后台 / offscreen / Worker 链路完成生成。
 12. Anthropic 协议经过完整后台 / offscreen / Worker 链路完成生成。
 13. 删除当前供应商正确回退；清除数据同时清空存储和已开面板的历史。
-14. 280px 对话面板、360px 设置页无横向页面溢出。
-15. 所有验收页面无未捕获 JavaScript 异常。
+14. 故意移除临时测试副本中的 Worker 文件，面板显示任务引擎错误，界面仍可用。
+15. 280px 对话面板、360px 设置页无横向页面溢出。
+16. 所有验收页面无未捕获 JavaScript 异常，也没有页面渲染进程崩溃。
 
 测试只对临时副本添加回环地址权限，便于非交互 CI 验收。生产 Manifest 继续使用可选站点授权。各测试标签页在抽屉鼠标检查前使用同一视口，避免测试浏览器中已复现的跨标签页视口覆盖导致 iframe 输入路由异常。
 
 机器结果和界面截图：`artifacts/e2e-results.json`、`artifacts/panel-empty.png`、`artifacts/panel-answer.png`、`artifacts/drawer-open.png`、`artifacts/settings-configured.png`。这些是本地验收输出，不纳入源码版本管理；CI 配置会上传验收产物。
+
+开发模式的同一套场景结果在 `artifacts/development/e2e-results.json`，截图也单独保存在该目录。测试使用真实 WXT serve 模式，不用 `build --mode development` 代替；自动服务使用临时输出和独立端口，不覆盖用户的开发产物。
+
+## 开发版侧栏崩溃修复
+
+已复现旧实现中侧栏初始化后出现 `Target crashed`，没有普通 JavaScript 异常。旧 Offscreen 的 `new Worker(new URL(..., import.meta.url))` 在开发服务中指向 HTTP Worker。改为 WXT 独立构建的 `engine-worker.js`，通过 `chrome.runtime.getURL` 加载后，真实开发模式与正式模式的全部场景均通过。构建校验同时要求该脚本存在；加载或运行失败会明确返回引擎错误，不持续转圈。
+
+更新后需要在 `chrome://extensions` 重新加载 Glintab，并刷新原网页后再次打开侧栏。重载会中断当前未完成的生成任务，已保存的配置与会话保留。
+
+## 纯扩展 ChatGPT 授权
+
+已移除本机 auth bridge 依赖。隔离 Chromium 使用模拟授权页、签名身份和无人监听的临时回调端口，验证授权码捕获、PKCE、state、nonce、ID-token 签名、模型列表与连接保存。真实后台 / offscreen / Worker 链路直接请求模拟 Codex Responses；第一次返回 401，验证刷新凭证后仅重试一次，并携带正确账号 ID 与 store:false / stream:true。
+
+配置与界面 RPC 不含 OpenAI token；专用凭证通道拒绝来自设置页/侧栏的请求；删除连接后本地令牌移除。行为测试另覆盖后台恢复、重复回调、取消与交换竞态、重连身份变化、刷新轮换持久化失败、过期草稿清理以及保存/清理并发。机器结果位于 `artifacts/chatgpt/results.json`，截图位于 `artifacts/chatgpt/authorized.png`。
+
+模型目录回归：模拟服务现在要求 `client_version`，缺失即返回 400。测试先在已授权后返回一次目录 400，再点击「获取模型」重试，验证无需重复交换授权码、模型自动选中且能保存连接。单元测试另验证真实目录的 `hide` 可见性过滤、错误响应不泄露原文，以及普通 API Key 模型列表不受查询参数变化影响。用户报告真实账号已完成授权；本次修复后仍需用户复验实际模型目录与推理。
+
+这套验证未使用真实 OpenAI 账号。Codex 兼容客户端与回调是否被实际授权服务器接受、nonce 与账号 ID 字段、模型目录和真实推理权限仍需人工联调；不能据模拟通过声称平台接入已验收。
 
 ## 仍需人工或真实服务联调
 
@@ -48,6 +68,6 @@
 - 未验证真实 OpenAI、Anthropic、各兼容服务或 Ollama；模拟协议通过不保证任意服务端支持所有请求参数。
 - 未完整人工验收中文输入法、系统剪贴板、下载交互、拖拽与双击恢复。
 - 尚未在多个真实文章站、登录站点或不同版本 Chrome 上做兼容矩阵。
-- YouTube / B 站字幕、时间戳、OAuth、云同步、知识库、主题与英文界面均未实现；视频专用页明确提示暂不支持。
+- YouTube / B 站字幕、时间戳、其他平台 OAuth、云同步、知识库、主题与英文界面均未实现；视频专用页明确提示暂不支持。
 
 这些限制不影响已交付的网页阅读版本，但不能将此记录解释为原始规格所有阶段均已验收。

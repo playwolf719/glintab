@@ -1,0 +1,16 @@
+body {
+  margin: 0;
+  color: #27272a;
+  background: #fafaf9;
+  font:
+    16px/1.8 system-ui,
+    sans-serif;
+}
+main {
+  max-width: 520px;
+  margin: 16vh auto;
+  padding: 32px;
+}
+h1 {
+  font-size: 28px;
+}

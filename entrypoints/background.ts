@@ -5,6 +5,8 @@ import { providerOrigin } from '../lib/platform/permissions';
 import { isReadableUrl, pageKey } from '../lib/domain/page';
 import { extractorFor } from '../lib/extraction/registry';
 import { listModels } from '../lib/llm/client';
+import { browserAccounts } from '../lib/auth/chatgpt';
+import { CHATGPT_PROVIDER_URL, CHATGPT_REDIRECT_URI } from '../config/chatgpt';
 import type {
   EngineEvent,
   EngineRequest,
@@ -17,6 +19,33 @@ import type {
 
 export default defineBackground(() => {
   const repository = new Repository(chrome.storage.local);
+  const authSession = new Repository(chrome.storage.session);
+  const accounts = browserAccounts(repository, authSession);
+  const authReady = accounts.recover();
+  void authReady.catch(() => {});
+  const observeAuth = (tabId: number, url: string) => {
+    if (url !== CHATGPT_REDIRECT_URI && !url.startsWith(CHATGPT_REDIRECT_URI + '?')) return;
+    void authReady.then(() => accounts.observe(tabId, url)).catch(() => {});
+  };
+  // Navigation events include failed loopback redirects; tabs polling is a fallback.
+  chrome.webNavigation.onBeforeNavigate.addListener(
+    (event) => {
+      if (event.frameId === 0) observeAuth(event.tabId, event.url);
+    },
+    { url: [{ hostEquals: '127.0.0.1', pathEquals: '/auth/callback' }] },
+  );
+  chrome.webNavigation.onErrorOccurred.addListener(
+    (event) => {
+      if (event.frameId === 0) observeAuth(event.tabId, event.url);
+    },
+    { url: [{ hostEquals: '127.0.0.1', pathEquals: '/auth/callback' }] },
+  );
+  chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+    for (const url of [change.url, tab.pendingUrl, tab.url]) if (url) observeAuth(tabId, url);
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    void authReady.then(() => accounts.closed(tabId)).catch(() => {});
+  });
   let creating: Promise<void> | undefined;
   let engineQueue: Promise<unknown> = Promise.resolve();
   function serializeEngine<T>(operation: () => Promise<T>): Promise<T> {
@@ -85,6 +114,14 @@ export default defineBackground(() => {
     return serializeEngine(() => dispatchEngine<T>(request));
   }
   async function validateProvider(provider: Provider) {
+    if (
+      provider.authType === 'chatgpt' &&
+      (provider.baseUrl !== CHATGPT_PROVIDER_URL ||
+        provider.apiFormat !== 'openai_responses' ||
+        !provider.chatgpt?.connectionId ||
+        provider.apiKey !== '')
+    )
+      throw new Error('ChatGPT 连接配置不完整，请重新登录。');
     if (!provider.name.trim() || !provider.model.trim())
       throw new Error('请填写供应商名称和模型。');
     if (!['openai_chat', 'anthropic', 'openai_responses'].includes(provider.apiFormat))
@@ -125,7 +162,23 @@ export default defineBackground(() => {
     });
   }
   async function handle(request: Request): Promise<unknown> {
+    await authReady;
     switch (request.type) {
+      case 'chatgpt:login:start': {
+        const config = await repository.config();
+        const provider = request.providerId
+          ? config.providers.find((item) => item.id === request.providerId)
+          : undefined;
+        if (request.providerId && provider?.authType !== 'chatgpt')
+          throw new Error('ChatGPT 连接不存在。');
+        return accounts.start(provider);
+      }
+      case 'chatgpt:login:status':
+        return accounts.status(request.flowId, request.statusKey);
+      case 'chatgpt:login:cancel':
+        return accounts.cancel(request.flowId, request.statusKey);
+      case 'chatgpt:connection:discard':
+        return accounts.discard(request.connectionId, request.draftKey);
       case 'config:get':
         return repository.config();
       case 'provider:save': {
@@ -136,6 +189,7 @@ export default defineBackground(() => {
           baseUrl: request.provider.baseUrl.trim().replace(/\/+$/, ''),
         };
         await validateProvider(provider);
+        if (provider.authType === 'chatgpt') return repository.saveChatGPTProvider(provider);
         return repository.updateConfig((config) => ({
           ...config,
           providers: [...config.providers.filter((p) => p.id !== provider.id), provider].sort(
@@ -144,7 +198,12 @@ export default defineBackground(() => {
           currentProviderId: config.currentProviderId || provider.id,
         }));
       }
-      case 'provider:delete':
+      case 'provider:delete': {
+        const provider = (await repository.config()).providers.find(
+          (item) => item.id === request.id,
+        );
+        if (provider?.authType === 'chatgpt')
+          await accounts.disconnect(provider.chatgpt!.connectionId);
         return repository.updateConfig((config) => {
           const providers = config.providers.filter((p) => p.id !== request.id);
           return {
@@ -156,6 +215,7 @@ export default defineBackground(() => {
                 : config.currentProviderId,
           };
         });
+      }
       case 'provider:select':
         return repository.updateConfig((config) => {
           if (!config.providers.some((p) => p.id === request.id))
@@ -168,6 +228,16 @@ export default defineBackground(() => {
         const origin = providerOrigin(request.provider.baseUrl);
         if (!(await chrome.permissions.contains({ origins: [origin] })))
           throw new Error('请先允许模型域名访问。');
+        if (request.provider.authType === 'chatgpt') {
+          if (
+            request.provider.baseUrl !== CHATGPT_PROVIDER_URL ||
+            !request.provider.chatgpt?.connectionId
+          )
+            throw new Error('ChatGPT 连接配置无效，请重新登录。');
+          return listModels(request.provider, fetch, (rejectedRevision) =>
+            accounts.credentials(request.provider.chatgpt!.connectionId, rejectedRevision),
+          );
+        }
         return listModels(request.provider);
       }
       case 'conversation:get':
@@ -227,7 +297,7 @@ export default defineBackground(() => {
           const tasks = await dispatchEngine<TaskSnapshot[]>({ target: 'engine', type: 'active' });
           if (tasks.length) throw new Error('请先停止所有页面的生成任务，再清除数据。');
           await chrome.offscreen.closeDocument();
-          return repository.clear();
+          return accounts.clear();
         });
     }
   }
@@ -239,6 +309,30 @@ export default defineBackground(() => {
         .catch((error) => respond({ ok: false, error: errorText(error) }));
       return true;
     };
+    if (message?.channel === 'glintab:auth') {
+      if (
+        !extensionPage(sender, ['/offscreen.html']) ||
+        typeof message.connectionId !== 'string' ||
+        (message.rejectedRevision !== undefined && typeof message.rejectedRevision !== 'string')
+      ) {
+        respond({ ok: false, error: '无权请求账号凭证。' });
+        return;
+      }
+      return send(
+        authReady.then(async () => {
+          const config = await repository.config();
+          if (
+            !config.providers.some(
+              (provider) =>
+                provider.authType === 'chatgpt' &&
+                provider.chatgpt?.connectionId === message.connectionId,
+            )
+          )
+            throw new Error('ChatGPT 连接未保存或已删除。');
+          return accounts.credentials(message.connectionId, message.rejectedRevision);
+        }),
+      );
+    }
     if (message?.channel === 'glintab:rpc') {
       if (!extensionPage(sender, ['/sidepanel.html', '/options.html'])) {
         respond({ ok: false, error: '无权调用此接口。' });
@@ -320,7 +414,9 @@ export default defineBackground(() => {
   // Alarms survive service-worker suspension. Only close an idle engine, never a running task.
   chrome.alarms.create('glintab:idle', { periodInMinutes: 2 });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name !== 'glintab:idle' || creating) return;
+    if (alarm.name !== 'glintab:idle') return;
+    void authReady.then(() => accounts.cleanup()).catch(() => {});
+    if (creating) return;
     void serializeEngine(async () => {
       if (!(await chrome.offscreen.hasDocument())) return;
       const active = await dispatchEngine<TaskSnapshot[]>({ target: 'engine', type: 'active' });
