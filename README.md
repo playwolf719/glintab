@@ -8,7 +8,8 @@
     <a href="#快速开始">快速开始</a> ·
     <a href="docs/USAGE.md">使用指南</a> ·
     <a href="docs/PRIVACY.md">隐私说明</a> ·
-    <a href="https://github.com/playwolf719/glintab/issues">反馈问题</a>
+    <a href="https://github.com/playwolf719/glintab/issues">反馈问题</a> ·
+    <a href="#支持作者">支持作者</a>
   </p>
 </div>
 
@@ -137,4 +138,20 @@ npm run format      # 统一格式
 
 欢迎通过 [Issues](https://github.com/playwolf719/glintab/issues) 提交问题与建议，也欢迎贡献改进。反馈时请附上复现步骤、浏览器版本与服务协议，并隐去密钥、账号凭证和敏感正文。
 
-如果 Glintab 对你有帮助，欢迎点个 Star，或通过「设置 → 支持作者」自愿打赏。打赏不影响功能使用，也不解锁额外功能。联系：[playwolf719@gmail.com](mailto:playwolf719@gmail.com)。
+## 支持作者
+
+如果 Glintab 对你有帮助，欢迎点个 Star，或请作者喝杯咖啡，支持项目持续维护。
+
+使用微信扫描下方收款码，自愿选择金额；付款前请核对收款人信息。也可在扩展的「设置 → 支持作者」中查看或保存收款码。
+
+<p align="center">
+  <a href="assets/support-qr.jpg">
+    <img src="assets/support-qr.jpg" width="248" alt="Glintab 作者的微信自愿打赏收款码" />
+  </a>
+</p>
+
+<p align="center"><sub>微信扫码支持作者 · 点击图片查看原图</sub></p>
+
+Glintab 免费使用，打赏完全自愿，不影响功能使用，也不解锁额外功能。付款在微信中完成，扩展不读取付款账号、金额或交易记录。
+
+联系：[playwolf719@gmail.com](mailto:playwolf719@gmail.com)。
