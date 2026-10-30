@@ -126,3 +126,36 @@ it('persists independent prompts and rejects invalid updates without overwriting
     await expect(repository.saveSettings(invalid)).rejects.toThrow('摘要指令');
   expect((await repository.config()).settings).toEqual(settings);
 });
+
+it('reads schema 2 without domain rules and persists normalized rules only through settings saves', async () => {
+  const storage = driver();
+  const { domainPrompts: _, ...legacySettings } = DEFAULT_CONFIG.settings;
+  await storage.set({ config: { ...DEFAULT_CONFIG, settings: legacySettings } });
+  const set = vi.spyOn(storage, 'set');
+  const repository = new Repository(storage);
+  expect((await repository.config()).settings.domainPrompts).toEqual([]);
+  expect(set).not.toHaveBeenCalled();
+  const settings = {
+    ...legacySettings,
+    domainPrompts: [{ id: 'one', domain: ' EXAMPLE.COM. ', prompt: '专属摘要' }],
+  };
+  const expected = {
+    ...settings,
+    domainPrompts: [{ id: 'one', domain: 'example.com', prompt: '专属摘要' }],
+  };
+  await repository.saveSettings(settings);
+  expect((await new Repository(storage).config()).settings).toEqual(expected);
+  await expect(
+    repository.saveSettings({
+      ...expected,
+      domainPrompts: [{ id: 'bad', domain: '*.example.com', prompt: '无效' }],
+    }),
+  ).rejects.toThrow('域名');
+  vi.spyOn(storage, 'set').mockRejectedValueOnce(new Error('quota'));
+  await expect(repository.saveSettings({ ...expected, domainPrompts: [] })).rejects.toThrow(
+    'quota',
+  );
+  expect((await repository.config()).settings).toEqual(expected);
+  await repository.saveSettings({ ...expected, domainPrompts: [] });
+  expect((await repository.config()).settings.domainPrompts).toEqual([]);
+});

@@ -14,10 +14,16 @@ export interface Provider {
   contextLimit: number;
   createdAt: number;
 }
+export interface DomainPrompt {
+  id: string;
+  domain: string;
+  prompt: string;
+}
 export interface Settings {
   summaryLanguage: 'zh' | 'en' | 'auto';
   webPrompt: string;
   videoPrompt: string;
+  domainPrompts?: DomainPrompt[];
   showContent: boolean;
 }
 export interface AppConfig {

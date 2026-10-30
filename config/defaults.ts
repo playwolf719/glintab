@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     summaryLanguage: 'zh',
     webPrompt: WEB_PROMPT,
     videoPrompt: VIDEO_PROMPT,
+    domainPrompts: [],
     showContent: true,
   },
 };

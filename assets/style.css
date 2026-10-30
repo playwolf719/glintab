@@ -1073,6 +1073,14 @@
     align-items: center;
     gap: 1px;
   }
+  .domain-prompt-rule {
+    padding: 18px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .domain-prompt-rule h3 {
+    font-size: 12px;
+    font-weight: 550;
+  }
   .settings-section {
     display: flex;
     align-items: center;

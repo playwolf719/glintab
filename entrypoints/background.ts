@@ -340,7 +340,7 @@ export default defineBackground(() => {
           if (!provider) throw new Error('请先添加并选择 AI 供应商。');
           await validateProvider(provider);
           const question = request.summary
-            ? summaryPrompt(request.conversation.source, config.settings)
+            ? summaryPrompt({ ...request.conversation.source, url: tab.url || '' }, config.settings)
             : request.question;
           if (!question.trim()) throw new Error('请输入问题或在设置中填写摘要指令。');
           const needsAudio = request.conversation.source.video?.transcription === 'required';

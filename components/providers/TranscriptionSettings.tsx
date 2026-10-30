@@ -97,6 +97,7 @@ export function TranscriptionSettings({ config }: { config?: TranscriptionConfig
             placeholder="填写服务商支持的语音转写模型"
             spellCheck={false}
           />
+          <small>推荐使用 gpt-4o-transcribe，响应格式请选择 JSON；需服务商支持该模型。</small>
         </label>
         <label className="field">
           转写响应格式

@@ -918,6 +918,111 @@ try {
     await options.getByRole('button', { name: '取消', exact: true }).click();
   });
   await step(
+    'multiple domain prompts persist, override summaries, update and fall back after deletion',
+    async () => {
+      await options.getByRole('button', { name: '摘要指令', exact: true }).click();
+      const webPrompt = '域名专属：仅列出文章中的证据。';
+      const videoPrompt = '域名专属：按主题总结视频并引用字幕时间戳。';
+      const fallbackWeb = await options.getByRole('textbox', { name: '网页摘要指令' }).inputValue();
+      const fallbackVideo = await options
+        .getByRole('textbox', { name: '视频摘要指令' })
+        .inputValue();
+      await options.getByRole('button', { name: '添加域名', exact: true }).click();
+      await expect(options.getByRole('button', { name: '保存指令' })).toBeDisabled();
+      await options.getByRole('textbox', { name: '域名 1', exact: true }).fill('127.0.0.1');
+      await options.getByRole('textbox', { name: '专属摘要指令 1', exact: true }).fill(webPrompt);
+      await options.getByRole('button', { name: '添加域名', exact: true }).click();
+      await options.getByRole('textbox', { name: '域名 2', exact: true }).fill(' YouTube.COM. ');
+      await options.getByRole('textbox', { name: '专属摘要指令 2', exact: true }).fill(videoPrompt);
+      await options.getByRole('button', { name: '保存指令' }).click();
+      await expect(options.getByRole('status')).toContainText('设置已保存');
+      await options.reload();
+      await options.getByRole('button', { name: '摘要指令', exact: true }).click();
+      await expect(
+        options.getByRole('textbox', { name: '专属摘要指令 1', exact: true }),
+      ).toHaveValue(webPrompt);
+      await expect(options.getByRole('textbox', { name: '域名 2', exact: true })).toHaveValue(
+        'youtube.com',
+      );
+      await expect(
+        options.getByRole('textbox', { name: '专属摘要指令 2', exact: true }),
+      ).toHaveValue(videoPrompt);
+      expect(await options.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await capture(options, 'settings-domain-prompts.png', true);
+
+      const invalid = await options.evaluate(async () => {
+        const { data } = await chrome.runtime.sendMessage({ type: 'config:get' });
+        const rules = data.settings.domainPrompts;
+        const result = await chrome.runtime.sendMessage({
+          type: 'settings:save',
+          settings: {
+            ...data.settings,
+            domainPrompts: [...rules, { ...rules[0], id: 'duplicate' }],
+          },
+        });
+        const after = await chrome.runtime.sendMessage({ type: 'config:get' });
+        return {
+          result,
+          unchanged: JSON.stringify(after.data.settings) === JSON.stringify(data.settings),
+        };
+      });
+      expect(invalid.result.ok).toBe(false);
+      expect(invalid.unchanged).toBe(true);
+
+      await article.goto(`${baseUrl}/domain-summary`);
+      await panel.getByRole('button', { name: '帮我总结这篇网页' }).click();
+      await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+      expect(requests.at(-1).messages.at(-1).content).toBe(webPrompt);
+      expect(JSON.stringify(requests.at(-1))).not.toContain(videoPrompt);
+      await panel.getByRole('textbox', { name: '向当前网页提问' }).fill('域名匹配时的直接问题');
+      await panel.getByRole('button', { name: '发送问题' }).click();
+      await expect.poll(() => requests.at(-1).messages.at(-1).content).toBe('域名匹配时的直接问题');
+      await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+
+      const video = await context.newPage();
+      await video.goto('https://www.youtube.com/watch?v=abcdefghijk&domain_prompt=1');
+      const videoTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        video.url(),
+      );
+      const videoPanel = await openPanel(videoTabId);
+      try {
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+        expect(requests.at(-1).messages.at(-1).content).toBe(videoPrompt);
+        await options.getByRole('button', { name: '删除域名指令 2', exact: true }).click();
+        const updated = '修改后的域名摘要：提取一个关键结论。';
+        await options.getByRole('textbox', { name: '专属摘要指令 1', exact: true }).fill(updated);
+        await options.getByRole('button', { name: '保存指令' }).click();
+        await expect(options.getByRole('status')).toContainText('设置已保存');
+        panel.once('dialog', (dialog) => dialog.accept());
+        await panel.getByRole('button', { name: '重新摘要' }).click();
+        await expect.poll(() => requests.at(-1).messages.at(-1).content).toBe(updated);
+        await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+        videoPanel.once('dialog', (dialog) => dialog.accept());
+        await videoPanel.getByRole('button', { name: '重新摘要' }).click();
+        await expect.poll(() => requests.at(-1).messages.at(-1).content).toBe(fallbackVideo);
+        await expect(videoPanel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+      } finally {
+        await videoPanel.close();
+        await video.close();
+      }
+      await options.getByRole('button', { name: '删除域名指令 1', exact: true }).click();
+      await options.getByRole('button', { name: '保存指令' }).click();
+      await expect(options.getByRole('status')).toContainText('设置已保存');
+      panel.once('dialog', (dialog) => dialog.accept());
+      await panel.getByRole('button', { name: '重新摘要' }).click();
+      await expect.poll(() => requests.at(-1).messages.at(-1).content).toBe(fallbackWeb);
+      await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+      await options.reload();
+      await options.getByRole('button', { name: '摘要指令', exact: true }).click();
+      await expect(options.getByRole('textbox', { name: '域名 1', exact: true })).toHaveCount(0);
+      await options.getByRole('button', { name: 'AI 供应商', exact: true }).click();
+    },
+  );
+  await step(
     'reasoning effort persists, reaches the Worker, resets, and rejects invalid RPC values',
     async () => {
       const select = options.getByRole('combobox', { name: '推理强度', exact: true });

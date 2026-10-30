@@ -17,6 +17,7 @@ import {
 import { Brand, ErrorBanner, IconButton } from '../../components/ui/primitives';
 import { ProviderForm } from '../../components/providers/ProviderForm';
 import { TranscriptionSettings } from '../../components/providers/TranscriptionSettings';
+import { DomainPromptSettings } from '../../components/providers/DomainPromptSettings';
 import { useConfig } from '../../lib/ui/use-config';
 import { VIDEO_PROMPT, WEB_PROMPT } from '../../config/defaults';
 import { SUMMARY_PROMPT_LIMIT } from '../../lib/domain/settings';
@@ -275,7 +276,7 @@ export default function App() {
             <>
               <div className="page-heading">
                 <h1>摘要指令</h1>
-                <p>分别自定义网页和视频总结的提示词，让摘要更贴近你的阅读习惯。</p>
+                <p>自定义网页、视频和特定域名的总结提示词，让摘要更贴近你的阅读习惯。</p>
               </div>
               <div className="section-title">
                 <h2>网页摘要</h2>
@@ -321,10 +322,25 @@ export default function App() {
                   这段指令用于 YouTube 和 B 站的「帮我总结这个视频」。直接提问时使用你输入的问题。
                 </small>
               </label>
+              <DomainPromptSettings
+                rules={settings.domainPrompts || []}
+                onChange={(domainPrompts) => {
+                  setSettings({ ...settings, domainPrompts });
+                  setFeedback('');
+                }}
+                disabled={saving}
+              />
               <div className="form-footer">
                 <button
                   className="button primary"
-                  disabled={saving || !settings.webPrompt.trim() || !settings.videoPrompt.trim()}
+                  disabled={
+                    saving ||
+                    !settings.webPrompt.trim() ||
+                    !settings.videoPrompt.trim() ||
+                    settings.domainPrompts?.some(
+                      (rule) => !rule.domain.trim() || !rule.prompt.trim(),
+                    )
+                  }
                   onClick={() => void saveSettings()}
                 >
                   保存指令
