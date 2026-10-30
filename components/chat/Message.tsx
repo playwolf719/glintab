@@ -43,7 +43,9 @@ export function Message({
             remarkPlugins={[remarkGfm]}
             skipHtml
             components={{
-              a: (props) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+              a: ({ node: _node, ...props }) => (
+                <a {...props} target="_blank" rel="noopener noreferrer" />
+              ),
               img: (props) => <span>[图片：{props.alt || '未加载'}]</span>,
             }}
           >

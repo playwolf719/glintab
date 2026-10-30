@@ -110,6 +110,8 @@ HTTP 400 错误正文最多读取 16,000 字节，1.5 秒后取消读取；仅�
 
 在 `lib/extraction/` 新建站点适配器并通过 `registry.ts` 分派，返回统一的 `PageSource`。专用脚本、权限和页面生命周期由 background 协调。视频地址识别和时间戳规则放在 `lib/domain/video.ts`；普通页面仍使用 Readability。
 
+普通网页在脱离原页面的 clone 上先规范链接，再交给 Readability，避免相对链接受中间文档 base URL 影响。链接完整保留查询参数及空值；无文字的图片链接使用已有 `aria-label / title / alt`，缺省使用「查看原文」，避免产生空标题 Markdown 链接。提取正文和回退路径共用规范结果，不修改现场 DOM、不下载封面图。上下文指令要求原样引用来源 URL、保留全部参数，不根据 ID 造链接；回答渲染剥离内部 AST `node` 属性，继续禁用原始 HTML 并保留安全的新窗口属性。提示词约束不能保证任意模型都遵守，实际来源可在正文查看器中核对。
+
 YouTube / B 站由 background 按需使用 `scripting.executeScript({ world: 'MAIN' })` 执行自包含的 `readVideoPage`，通过 Chrome 注入结果直接返回，不增加页面可调用的 runtime / postMessage 桥。函数不依赖外部运行时变量，不携带扩展配置或密钥，不安装网络钩子，不修改播放器状态。页面输出一律不可信，后台 `videoSource` 重新校验视频身份、分 P、格式、有限时间值和长度，再构造 `PageSource.video` 的分段时间模型及正文中的时间戳链接。新字段可选，已有会话无需迁移。
 
 YouTube 校验当前播放器响应的 videoId，选择轨道并读取 JSON3 或 XML；可复用当前视频、当前语言已请求的播放器字幕 URL。B 站重新请求 URL 对应的视频元信息，按 `p` 选择 cid，再访问 `/x/player/wbi/v2` 和受限的字幕 CDN 域名，不依赖可能滞后的 SPA 初始状态。此接口可能受登录、签名策略或风控影响，失败时明确提示，不降级为旧接口、弹幕或导航正文。

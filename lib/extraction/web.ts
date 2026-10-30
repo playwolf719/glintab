@@ -4,6 +4,33 @@ import { gfm } from 'turndown-plugin-gfm';
 import { pageKey } from '../domain/page';
 import type { PageSource } from '../../types';
 
+function prepareLinks(root: ParentNode, url: string) {
+  root.querySelectorAll('a[href]').forEach((anchor) => {
+    const href = anchor.getAttribute('href') || '';
+    try {
+      const absolute = new URL(href, url);
+      if (href.startsWith('#') || !['http:', 'https:'].includes(absolute.protocol)) {
+        anchor.replaceWith(...anchor.childNodes);
+        return;
+      }
+      // Resolve before Readability, using the actual source URL. Preserve the
+      // complete query, including encoded signatures and empty parameter values.
+      anchor.setAttribute('href', absolute.href);
+      if (!anchor.textContent?.trim()) {
+        const label =
+          anchor.getAttribute('aria-label')?.trim() ||
+          anchor.getAttribute('title')?.trim() ||
+          anchor.querySelector('img')?.getAttribute('alt')?.trim();
+        // Images without alt text produce empty Markdown link labels. Keep the
+        // actual destination visible without inventing the linked page's title.
+        anchor.textContent = label || '查看原文';
+      }
+    } catch {
+      anchor.replaceWith(...anchor.childNodes);
+    }
+  });
+}
+
 export function extractWeb(doc: Document, url: string): PageSource {
   const clone = doc.cloneNode(true) as Document;
   clone
@@ -11,20 +38,11 @@ export function extractWeb(doc: Document, url: string): PageSource {
       'script,style,iframe,noscript,svg,canvas,nav,footer,aside,[data-glintab-host]',
     )
     .forEach((el) => el.remove());
+  prepareLinks(clone, url);
   const article = new Readability(clone.cloneNode(true) as Document).parse();
   const container = doc.createElement('div');
   container.innerHTML = article?.content || clone.body.innerHTML;
-  container.querySelectorAll('a[href]').forEach((anchor) => {
-    const href = anchor.getAttribute('href') || '';
-    try {
-      const absolute = new URL(href, url);
-      if (href.startsWith('#') || !['http:', 'https:'].includes(absolute.protocol))
-        anchor.replaceWith(...anchor.childNodes);
-      else anchor.setAttribute('href', absolute.href);
-    } catch {
-      anchor.replaceWith(...anchor.childNodes);
-    }
-  });
+  prepareLinks(container, url);
   const converter = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
   converter.use(gfm);
   converter.addRule('image-alt', {
