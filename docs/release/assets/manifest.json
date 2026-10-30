@@ -35,25 +35,25 @@
       "file": "03-source-inspection.png",
       "width": 1280,
       "height": 800,
-      "sha256": "e4dffdf199a968639af25b8c58a32d7032980c1dae79877a3ed231cdb1939e8b"
+      "sha256": "fda33564ee38ef3cd7a3a7084487ae539948e662315434041cd9c17de001d577"
     },
     {
       "file": "04-summary-prompts.png",
       "width": 1280,
       "height": 800,
-      "sha256": "520d33621a63aa6ac189296e65a770c2e59173beaf797228382201b05d02d0a7"
+      "sha256": "92015c1b2a7d10970d49478be5e1f6ca3f9bba024b18cc9e1f428ae080c99118"
     },
     {
       "file": "promo-small-440x280.png",
       "width": 440,
       "height": 280,
-      "sha256": "697a7c000b7a66618b7e4deb353440b6c824f1b55c79b5b638f85d44ebfaaa68"
+      "sha256": "ac24b2d8b7d0f58e9e492aeef94fa85bc45daf73d43a21fc2e9115d1579a6b64"
     },
     {
       "file": "promo-marquee-1400x560.png",
       "width": 1400,
       "height": 560,
-      "sha256": "ea6089364a0507a6701cd3adbaf64e448fa1329c54f119e7142beb49a1c15a29"
+      "sha256": "3fd1a8993aac7a9161b1bf6d0384a8e41136ae160a6ebd460fa486dd71c2f193"
     }
   ]
 }

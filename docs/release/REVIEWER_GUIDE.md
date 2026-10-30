@@ -16,6 +16,8 @@ Glintab helps users summarize and ask questions about a selected web page or acc
 
 ChatGPT account connection is an optional Codex-compatible integration and is not required for the API Key workflow. It is not an official OpenAI extension. Actual account access, region restrictions and model availability require live verification; automated tests use simulated identities and do not establish official platform support.
 
+The 支持作者 settings section displays a bundled QR image for optional tips to the publisher through WeChat. Tipping is entirely voluntary and does not unlock or restrict any functionality. The extension only displays/downloads the local image; it does not initiate payments, receive payment callbacks or collect payer details, amounts or transaction records.
+
 All executable code is bundled. Settings, credentials and the latest 10 URL conversations are stored locally; API keys and tokens are not encrypted at rest. User-initiated generation sends necessary source content, URL, title, prompts and history directly to the selected model service. There is no publisher-operated content relay, analytics or advertising. Optional transcription sends audio directly to the configured service. Local deletion cannot recall data already sent to a service.
 
 ## 提交前补齐测试访问方式

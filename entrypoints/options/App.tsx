@@ -13,11 +13,13 @@ import {
   Sparkles,
   Trash2,
   FileAudio,
+  Heart,
 } from 'lucide-react';
 import { Brand, ErrorBanner, IconButton } from '../../components/ui/primitives';
 import { ProviderForm } from '../../components/providers/ProviderForm';
 import { TranscriptionSettings } from '../../components/providers/TranscriptionSettings';
 import { DomainPromptSettings } from '../../components/providers/DomainPromptSettings';
+import { SupportAuthor } from '../../components/settings/SupportAuthor';
 import { useConfig } from '../../lib/ui/use-config';
 import { VIDEO_PROMPT, WEB_PROMPT } from '../../config/defaults';
 import { SUMMARY_PROMPT_LIMIT } from '../../lib/domain/settings';
@@ -27,9 +29,9 @@ import { grantProvider } from '../../lib/platform/permissions';
 
 export default function App() {
   const { config, error, setError, loaded } = useConfig();
-  const [section, setSection] = useState<'providers' | 'prompts' | 'general' | 'transcription'>(
-    'providers',
-  );
+  const [section, setSection] = useState<
+    'providers' | 'prompts' | 'general' | 'transcription' | 'support'
+  >('providers');
   const [editing, setEditing] = useState<Provider | 'new' | null>(null);
   const [settings, setSettings] = useState<Settings>(config.settings);
   const [feedback, setFeedback] = useState('');
@@ -68,6 +70,7 @@ export default function App() {
     { id: 'prompts', label: '摘要指令', icon: Sparkles },
     { id: 'transcription', label: '语音转写', icon: FileAudio },
     { id: 'general', label: '通用设置', icon: SlidersHorizontal },
+    { id: 'support', label: '支持作者', icon: Heart },
   ] as const;
   return (
     <div className="settings-shell">
@@ -271,6 +274,7 @@ export default function App() {
                 </div>
               </>
             ))}
+          {section === 'support' && <SupportAuthor />}
           {section === 'transcription' && <TranscriptionSettings config={config.transcription} />}
           {section === 'prompts' && (
             <>

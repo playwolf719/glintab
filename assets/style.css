@@ -123,6 +123,68 @@
   }
 }
 @layer components {
+  .support-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+    gap: 40px;
+    align-items: start;
+  }
+  .support-copy {
+    padding-top: 20px;
+    max-width: 380px;
+    overflow-wrap: anywhere;
+  }
+  .support-copy > svg {
+    color: var(--blue);
+    margin-bottom: 14px;
+  }
+  .support-copy h2 {
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+  .support-copy p {
+    margin-bottom: 18px;
+    line-height: 1.9;
+  }
+  .support-copy .muted,
+  .support-copy a {
+    font-size: 12px;
+  }
+  .support-qr {
+    width: 100%;
+    max-width: 320px;
+    margin: 0;
+  }
+  .support-qr img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .support-qr figcaption {
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+    margin: 14px 0;
+  }
+  .support-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+  }
+  @media (max-width: 900px) {
+    .support-layout {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 28px;
+    }
+    .support-copy {
+      max-width: none;
+      padding-top: 0;
+    }
+    .support-qr {
+      justify-self: center;
+    }
+  }
   .connection-modes {
     display: flex;
     gap: 6px;
@@ -1457,12 +1519,13 @@
     }
     .settings-nav nav {
       flex-direction: row;
+      flex-wrap: wrap;
       margin-top: 20px;
       gap: 5px;
     }
     .settings-nav nav button {
       padding: 8px;
-      flex: 1;
+      flex: 1 1 90px;
       justify-content: center;
       font-size: 11px;
       gap: 5px;

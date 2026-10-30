@@ -150,6 +150,8 @@ Worker 通过 offscreen 的 `glintab:audio` 专用消息向 background 申请音
 
 ## 安全和权限边界
 
+设置页「支持作者」由 `components/settings/SupportAuthor.tsx` 展示包内 `assets/support-qr.jpg`，使用发布者提供的收款码原图。图片按原样打包，不解码二维码、不自动访问付款地址；查看原图和保存图片通过普通本地资源链接完成。此入口不写存储、不新增 RPC 或权限，不集成支付 SDK、订单状态或功能解锁逻辑。
+
 ChatGPT 授权由 `lib/auth/` 管理，background 只协调浏览器标签页与导航事件。固定登录标签页与精确回调 origin / port / path，并校验 state、PKCE、nonce 与 ID-token 签名；不要求 localhost 监听器。导航事件捕获回调，状态查询以 pendingUrl / url 兜底。回调的授权码先标记已消费，再交换令牌，避免重复事件复用。
 
 `Repository(chrome.storage.local)` 独占 `chatgpt-auth:<id>` 凭证写入；`Repository(chrome.storage.session)` 保存短期登录流程与 PKCE，支持后台重启，浏览器退出后不保留未完成流程。后台重启遇到交换中的流程会要求重新登录，不重复消费授权码。配置只保存连接 ID / email；常规界面响应、任务快照和广播事件不携带令牌。过期未保存的连接会清理，已保存记录在恢复时保留。

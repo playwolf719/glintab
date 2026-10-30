@@ -45,6 +45,8 @@
 | 健康信息 / Health information                      | 无专门采集功能       | 普通正文可能包含此类信息；若发布用途或演示内容涉及健康数据，需相应申报并同步政策。                     |
 | 财务和付款信息 / Financial and payment information | 无专门采集功能       | 扩展无付款表单、交易采集或计费系统；若发布用途涉及此类页面，需按实际处理范围申报。                     |
 
+「支持作者」仅展示包内微信收款码，付款在用户自己的微信中完成。扩展没有支付回调、订单状态、金额或付款账号采集，也不因打赏新增用户财务和付款信息的采集。发布者在支付平台看到的收款交易信息由平台处理，已在隐私政策中说明。
+
 若后台单独提供音频数据类型，也应披露可选音轨转写；不要将「不使用麦克风」解释为不处理音频。用户选择的网页可能包含敏感内容，应在发起请求前检查正文。
 
 数据用途可声明为提供上述阅读功能；不售卖数据、不用于广告、不用于无关目的、不用于信用评估。将必要文本或音频发送至用户选择的服务，是提供相应功能的数据传输，不能笼统申报「完全不向第三方传输」。第三方的保留政策由用户选择的服务决定。
@@ -56,5 +58,6 @@
 - [Chrome 隐私字段说明](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)
 - [用户数据处理 FAQ（含仅本地处理仍需披露）](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq)
 - [Chrome 用户数据政策](https://developer.chrome.com/docs/webstore/program-policies/user-data)
+- [Chrome 收款政策（透明说明与支付数据处理）](https://developer.chrome.com/docs/webstore/program-policies/accepting-payment)
 
 核对日期：2026-10-30。后台字段变化时以当次显示及实际产品行为为准。
