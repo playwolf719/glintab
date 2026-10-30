@@ -137,7 +137,7 @@ export default function App() {
           </strong>
           <span>
             {domain}
-            {source && (
+            {source?.content && (
               <>
                 {' '}
                 <span className="source-divider">/</span>{' '}
@@ -305,10 +305,10 @@ export default function App() {
               <RefreshCw size={12} />
               重新摘要
             </button>
-            {source && config.settings.showContent && (
+            {source?.content && config.settings.showContent && (
               <button className="text-link" onClick={() => setViewContent(true)}>
                 <FileText size={12} />
-                {source.video ? '查看字幕' : '查看正文'}
+                {source.video?.transcription ? '查看转写' : source.video ? '查看字幕' : '查看正文'}
               </button>
             )}
           </div>
@@ -322,7 +322,7 @@ export default function App() {
                 : '正在提取网页正文…'
               : chat.phase === 'starting'
                 ? '正在启动模型…'
-                : '正在生成回答，关闭面板后仍会继续'}
+                : chat.progress || '正在生成回答，关闭面板后仍会继续'}
           </div>
         )}
         {editId && (

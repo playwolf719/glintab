@@ -1,4 +1,4 @@
-import type { EngineEvent, StartTask, TaskSnapshot } from '../../types';
+import type { EngineEvent, PageSource, StartTask, TaskSnapshot } from '../../types';
 import { buildContext } from '../domain/context';
 import { streamCompletion } from '../llm/client';
 import { errorText } from '../platform/rpc';
@@ -17,6 +17,11 @@ export class TaskManager {
   constructor(
     private emit: (event: EngineEvent) => Promise<void>,
     private complete: Complete = streamCompletion,
+    private prepare?: (
+      input: StartTask,
+      signal: AbortSignal,
+      progress: (text: string) => void,
+    ) => Promise<PageSource>,
   ) {}
   private key(tabId: number, pageKey: string) {
     return `${tabId}:${pageKey}`;
@@ -76,8 +81,15 @@ export class TaskManager {
     };
     const controller = new AbortController();
     const timer = setTimeout(
-      () => controller.abort(new Error('请求超过 5 分钟，已停止并保留收到的内容。')),
-      5 * 60 * 1000,
+      () =>
+        controller.abort(
+          new Error(
+            conversation.source.video?.transcription === 'required'
+              ? '音轨转写超过 20 分钟，已停止。'
+              : '请求超过 5 分钟，已停止并保留收到的内容。',
+          ),
+        ),
+      (conversation.source.video?.transcription === 'required' ? 20 : 5) * 60 * 1000,
     );
     const task: RunningTask = { snapshot, controller, timer, lastEmit: 0 };
     this.tasks.set(key, task);
@@ -101,6 +113,31 @@ export class TaskManager {
     let partial = '';
     const assistantId = crypto.randomUUID();
     try {
+      if (conversation.source.video?.transcription === 'required') {
+        if (!this.prepare || !input.transcription?.enabled)
+          throw new Error('当前分 P 没有字幕。请在设置 → 语音转写中配置并启用 B 站音轨转写。');
+        snapshot.progress = '正在获取 B 站音轨…';
+        await this.publish(task, true);
+        controller.signal.throwIfAborted();
+        conversation.source = await this.prepare(input, controller.signal, (text) => {
+          if (controller.signal.aborted || this.tasks.get(key) !== task) return;
+          snapshot.progress = text;
+          if (Date.now() - task.lastEmit > 250) {
+            task.lastEmit = Date.now();
+            void this.publish(task, false).catch(() => {});
+          }
+        });
+        controller.signal.throwIfAborted();
+        snapshot.progress = undefined;
+        // Persist the completed transcript before a summary request can fail.
+        await this.publish(task, true);
+        clearTimeout(task.timer);
+        task.timer = setTimeout(
+          () => controller.abort(new Error('模型请求超过 5 分钟，已停止。')),
+          5 * 60 * 1000,
+        );
+      }
+      controller.signal.throwIfAborted();
       const context = buildContext(conversation, input.provider, input.settings);
       if (context.reduced)
         conversation.notice =
@@ -143,6 +180,7 @@ export class TaskManager {
       else conversation.messages.push({ id: assistantId, role: 'assistant', content: text });
       conversation.notice = userStop ? '已停止，生成内容已保留。' : snapshot.error;
     } finally {
+      snapshot.progress = undefined;
       clearTimeout(task.timer);
       conversation.updatedAt = Date.now();
       try {

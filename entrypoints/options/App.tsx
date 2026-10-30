@@ -12,9 +12,11 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  FileAudio,
 } from 'lucide-react';
 import { Brand, ErrorBanner, IconButton } from '../../components/ui/primitives';
 import { ProviderForm } from '../../components/providers/ProviderForm';
+import { TranscriptionSettings } from '../../components/providers/TranscriptionSettings';
 import { useConfig } from '../../lib/ui/use-config';
 import { VIDEO_PROMPT, WEB_PROMPT } from '../../config/defaults';
 import { SUMMARY_PROMPT_LIMIT } from '../../lib/domain/settings';
@@ -24,7 +26,9 @@ import { grantProvider } from '../../lib/platform/permissions';
 
 export default function App() {
   const { config, error, setError, loaded } = useConfig();
-  const [section, setSection] = useState<'providers' | 'prompts' | 'general'>('providers');
+  const [section, setSection] = useState<'providers' | 'prompts' | 'general' | 'transcription'>(
+    'providers',
+  );
   const [editing, setEditing] = useState<Provider | 'new' | null>(null);
   const [settings, setSettings] = useState<Settings>(config.settings);
   const [feedback, setFeedback] = useState('');
@@ -61,6 +65,7 @@ export default function App() {
   const nav = [
     { id: 'providers', label: 'AI 供应商', icon: KeyRound },
     { id: 'prompts', label: '摘要指令', icon: Sparkles },
+    { id: 'transcription', label: '语音转写', icon: FileAudio },
     { id: 'general', label: '通用设置', icon: SlidersHorizontal },
   ] as const;
   return (
@@ -265,6 +270,7 @@ export default function App() {
                 </div>
               </>
             ))}
+          {section === 'transcription' && <TranscriptionSettings config={config.transcription} />}
           {section === 'prompts' && (
             <>
               <div className="page-heading">

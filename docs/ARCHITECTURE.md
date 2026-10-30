@@ -52,7 +52,7 @@ flowchart LR
   Background --> Repository[本地仓储]
 ```
 
-Offscreen 使用 Chrome 的 `WORKERS` reason，确实创建独立 Worker；模型网络任务在 Worker 执行，不依赖 React 页面存活。Offscreen 仅使用 `chrome.runtime`，不会直接调用不支持的 storage API。
+Offscreen 使用 Chrome 的 `WORKERS` / `BLOBS` reason，创建独立 Worker，并在有需要时解码音频 Blob；模型网络任务在 Worker 执行，不依赖 React 页面存活。不使用会在无播放时自动关闭的 `AUDIO_PLAYBACK` reason。Offscreen 仅使用 `chrome.runtime`，不会直接调用不支持的 storage API。
 
 Worker 使用 WXT unlisted script 单独构建，通过 `chrome.runtime.getURL('/engine-worker.js')` 创建。不要使用基于 `import.meta.url` 的 Vite Worker 路径：在开发服务中它会指向 HTTP 资源，与扩展源不同，已在浏览器中复现其导致侧栏渲染进程崩溃。Worker 初始化失败会返回明确错误，不让面板持续加载。`test:e2e:dev` 使用隔离开发服务验证这条链路，CI 同时覆盖开发和生产模式。
 
@@ -115,6 +115,20 @@ YouTube 校验当前播放器响应的 videoId，选择轨道并读取 JSON3 或
 自动测试覆盖模拟 JSON3 / XML / B 站字幕的解析、无字幕、登录限制、超时恢复、切页、分 P、下载域名和上下文预算，并在真实扩展中验证 MAIN → background → Worker 链路。真实站点验证状态单独记录在 `ACCEPTANCE.md`，不可将模拟通过解释为真实账号或全站视频验收。
 
 涉及 MAIN world 时将读取结果视为不可信输入，不从页面读取任意命令。临时网络钩子必须在 finally 恢复。视频字幕需独立的分段时间模型，不能直接把播放器导航文字当正文。
+
+### B 站音轨转写
+
+配置中的可选 `transcription` 独立保存 `enabled / baseUrl / apiKey / model / responseFormat`，缺省时禁用，兼容 schema 2，无需迁移；由 `lib/domain/transcription.ts` 校验，经后台 `Repository.updateConfig` 写入。表单直接在用户点击时申请转写服务和受限 B 站音频 CDN 的可选 host 权限。密钥不进入 MAIN、任务快照、事件和会话；配置编辑对已启动任务不追溯生效。
+
+`readVideoPage` 仅在 B 站字幕列表为空且不要求登录时返回 `bilibili-audio-required`，`videoSource` 构造空正文和 `video.transcription:'required'` 标记。`task:start` 校验当前 B 站页面和已启用的配置，将转写配置作为独立任务输入。TaskManager 在调用模型前执行可注入的准备步骤，先持久化任务，再发布进度，最终拿到正文后进入已有预算/生成流程。准备与转写最多 20 分钟，模型阶段重新计时 5 分钟；`tabId + pageKey / streamId / sequence` 继续负责隔离、去重和过滤旧事件。完成的转写先单独持久化，避免总结失败后丢失转写；初始保存失败不发起下载或付费转写。
+
+Worker 通过 offscreen 的 `glintab:audio` 专用消息向 background 申请音轨元数据，后台仅接受自身 offscreen，并确认引擎中的任务仍在运行、streamId 与页面匹配。`lib/extraction/bilibili-audio.ts` 在 MAIN 中重新读取 URL 对应的视频与分 P 信息，再请求播放接口；禁止重定向，12 秒中止 fetch，后台 15 秒兜底。仅使用完整、非受保护、非试看、60 分钟以内的 AAC 音轨，从主备地址中选择受限 HTTPS CDN，剔除第三方 PCDN 和非标准端口。MAIN 结果不可信，后台重新校验身份、cid、时长与 URL。返回前再次检查当前标签页与任务，旧调用不能向新任务交付地址。
+
+`declarativeNetRequestWithHostAccess` 仅设置一个 session 规则：initiator 为本扩展、目标为 `bilivideo.com / bilivideo.cn` 的 XHR 请求才附加固定 B 站 Referer；不修改网页请求，不读取其请求内容，禁用转写或清空数据时移除规则。音轨 URL 只在后台到 offscreen 的私有响应中出现，不进入持久化或广播。
+
+`lib/engine/audio.ts` 在 offscreen 中以 `credentials:omit / redirect:error` 下载，限制 64 MB，并在解码前校验媒体容器时长。浏览器解码为 16 kHz PCM，最多 5 分钟分一段，生成独立合法的单声道 WAV，经 transferable 交给 Worker；不是切割压缩字节，不需要录音或播放视频。offscreen 同时只准备一个音轨，避免多个解码器占用过多内存。转写参数由 `lib/llm/transcription.ts` 以 multipart 上传，默认不自动重试计费请求；仅有限读取 JSON，错误不回显原始响应。有真实分段时间戳才平移片段偏移并生成链接，否则保存纯文本并使用 `timestamps:false` 明确禁止虚构时间戳。
+
+取消会同时中止音轨 fetch 和转写 fetch，Worker 立即结束等待解码的操作，原生解码完成后释放资源，旧响应按独立请求 ID 忽略。正在转写时切换 URL 或关闭源标签页也会停止；后台通过存活引擎查询任务并重新读取标签页 URL，不依赖 Service Worker 内存索引，后台休眠重启后仍能处理切页，旧导航事件不会停止绑定新 URL 的任务。转写完成后的总结按原有独立任务行为运行。关闭面板后继续，重开从引擎快照恢复进度；浏览器退出不支持音频断点续传，未完成的分段文字不落盘，重试会重新计费。原音频与签名 URL 不保存，只有规范化来源、转写标记和最终文字/实际时间片段进入 Repository。
 
 ### 引用、笔记与压缩
 

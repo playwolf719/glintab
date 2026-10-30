@@ -7,11 +7,11 @@
 | 检查                   | 结果                                                           |
 | ---------------------- | -------------------------------------------------------------- |
 | `npm run compile`      | 通过，TypeScript strict / noUncheckedIndexedAccess             |
-| `npm test`             | 12 个测试文件，99 项测试通过                                   |
+| `npm test`             | 14 个测试文件，123 项测试通过                                  |
 | `npm run build`        | 生产构建通过，生成可安装 MV3 目录                              |
 | Manifest 与资源校验    | 通过；无默认全站 host 权限，无全站自动内容脚本，图标和入口完整 |
 | `npm run format:check` | 通过                                                           |
-| `npm run test:e2e`     | 正式版 21 个阅读/字幕/配置场景及纯扩展 OAuth 链路通过          |
+| `npm run test:e2e`     | 正式版 22 个阅读/字幕/音轨转写/配置场景及纯扩展 OAuth 链路通过 |
 | `npm run test:e2e:dev` | 开发版 20 个真实 Chromium 场景通过，自动启动隔离 WXT 服务      |
 | `npm run zip`          | 已生成 `output/glintab-0.1.0-chrome.zip`                       |
 | 安装依赖审计           | 最近一次 npm 安装审计结果为 0 漏洞                             |
@@ -100,7 +100,17 @@
 - YouTube 公共视频 `aircAruvnKk` 的播放器提供多语言字幕轨道；HTTP 及隔离 Chromium 实际开启字幕后，字幕端点均返回 HTTP 200 空内容。尚未成功下载该样本的真实字幕；未据此推断其他视频或个人登录态可用。当前实现会提示开启字幕/刷新并重试，不将空内容提交给模型。
 - B 站公共样本 `BV1xx411c7mD` 的视频信息及 `/x/player/wbi/v2` 均返回 code 0，当前 cid 为 62131，但字幕列表为空，`need_login_subtitle=false`。验证了无字幕响应结构，没有验证登录后带字幕视频的成功路径。
 
-无字幕转写、画面理解、直播增量字幕、B 站番剧/课程/互动分支与合集批处理不在此次范围。自动字幕可能存在识别错误；模型返回的引用需要与字幕核对。
+上述记录对应字幕功能的早期验收；后续 B 站音轨转写验收见下节。YouTube 无字幕转写、录音、画面理解、直播增量字幕、B 站番剧/课程/互动分支与合集批处理仍不在此次范围。自动字幕和转写可能存在识别错误；模型返回的引用需要与来源核对。
+
+## B 站音轨转写（2026-10-30）
+
+新增行为测试覆盖：无字幕标记、当前分 P/cid、最低带宽 AAC 主备地址选择、域名与端口限制、试看/受保护/部分音轨拒绝、体积与时长上限、独立合法 WAV 编码、multipart 参数和文件内容、真实分段时间偏移、无时间戳纯文字、非法时间/空文字拒绝、计费请求不自动重试、停止后不提交后续片段、初始持久化失败不调用转写、转写保存后总结失败仍保留文字，以及跨标签页任务与旧停止指令隔离。
+
+浏览器场景在实际扩展中执行 MAIN → background → offscreen → Worker → 模拟转写服务 → 模拟总结服务的链路。音轨是仓库中通过 FFmpeg 生成的 2 秒合成 AAC（`tests/fixtures/bilibili-audio.m4a`），真实调用浏览器解码和 WAV 编码，不模拟音频处理。offscreen 不是 Playwright 页面，其测试 CDN 请求在对应 CDP target 上拦截，不放宽生产 URL 校验。验收覆盖默认关闭不下载、不调用转写，配置与域名授权，禁止 UI 伪造音轨私有请求，转写/时间戳展示，追问复用，签名 URL 和密钥不进入会话，纯文字无链接，转写中关闭面板后恢复、停止、后台 Service Worker 实际重启后的切页停止、429 失败和手动重新执行。截图为 `artifacts/transcription-settings.png` 和 `artifacts/bilibili-audio-transcript.png`。
+
+真实平台只读探测使用全新无登录态隔离 Chromium，公共样本 `BV1GJ411x7h7`：视频/播放接口成功，独立音轨时长 212.393 秒。首选地址可能为第三方 PCDN 或非标准端口，因此选择接口返回的受限 HTTPS 备用 CDN；本次为 `upos-sz-mirrorcoso1.bilivideo.com`。成功下载并用浏览器解码为 212.394 秒 PCM，编码 WAV 首部为 `RIFF`，没有持久保存原音频，也没有向任何真实转写或总结接口发送音频。这个样本验证了下载和解码，不代表登录/会员视频、全部 CDN 或真实付费转写服务已验收。
+
+原始重建指南保留。未增加默认全站 host 权限，runtime 内容脚本继续 `matches: []`；新增的 declarativeNetRequestWithHostAccess 只针对扩展自身的已授权音轨 CDN 请求附加 Referer。不新增麦克风、录音或 Native Messaging。旧配置无转写字段时保持禁用，配置和会话仍仅由后台 Repository 写入。
 
 ## 网页与视频独立提示词
 

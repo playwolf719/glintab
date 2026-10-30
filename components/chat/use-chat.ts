@@ -14,6 +14,7 @@ export function useChat() {
     'loading',
   );
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState('');
   const identity = useRef('');
   const stream = useRef<string | null>(null);
   const latest = useRef<TaskSnapshot | null>(null);
@@ -31,6 +32,7 @@ export function useChat() {
     setConversation(snapshot.conversation);
     setPhase(snapshot.status === 'running' ? 'running' : 'idle');
     setError(snapshot.error || '');
+    setProgress(snapshot.status === 'running' ? snapshot.progress || '' : '');
   }, []);
   const load = useCallback(async () => {
     const query = ++tabQuery.current;
@@ -58,6 +60,7 @@ export function useChat() {
       requestedStream.current = null;
       actionPending.current = false;
       setConversation(null);
+      setProgress('');
       setError('');
       setPhase('loading');
       const [saved, snapshot] = await Promise.all([
@@ -218,6 +221,7 @@ export function useChat() {
     conversation,
     phase,
     error,
+    progress,
     setError,
     send,
     stop,

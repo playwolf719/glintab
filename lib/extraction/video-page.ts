@@ -191,11 +191,27 @@ export async function readVideoPage(
         throw new Error('B 站字幕接口暂不可用，请登录、开启字幕并刷新后重试。');
       if (metadata.data.cid !== undefined && metadata.data.cid !== current.cid)
         throw new Error('字幕与当前分 P 不匹配，请刷新后重试。');
+      if (!Array.isArray(metadata.data.subtitle?.subtitles) && !metadata.data.need_login_subtitle)
+        throw new Error('B 站字幕列表格式无效，未启动音轨转写，请刷新后重试。');
       const track = choose(metadata.data.subtitle?.subtitles || []);
       if (!track?.subtitle_url) {
         if (metadata.data.need_login_subtitle)
           throw new Error('此视频字幕需要登录 B 站，请登录并刷新后重试。');
-        throw new Error('当前分 P 没有可读取的字幕，暂不支持音频转写或弹幕总结。');
+        if (metadata.data.subtitle!.subtitles!.length)
+          throw new Error('B 站字幕轨道地址无效，未启动音轨转写，请刷新后重试。');
+        return {
+          ok: true,
+          data: {
+            url: expectedUrl,
+            videoId,
+            part,
+            title: `${view.data.title || document.title}${(view.data.pages?.length || 0) > 1 ? ` · P${part} ${current.part}` : ''}`,
+            language: 'und',
+            automatic: true,
+            format: 'bilibili-audio-required',
+            body: '',
+          },
+        };
       }
       const url = allowed(track.subtitle_url, 'bilibili');
       const captions = JSON.parse(await download(url.href, 'omit')) as {

@@ -25,11 +25,15 @@ manifest.host_permissions = [
     'http://127.0.0.1/*',
     'https://www.youtube.com/*',
     'https://www.bilibili.com/*',
+    'https://*.bilivideo.com/*',
+    'https://*.bilivideo.cn/*',
   ]),
 ];
 await writeFile(manifestPath, JSON.stringify(manifest));
 await mkdir(artifactPath, { recursive: true });
 const requests = [];
+const transcriptions = [];
+let transcriptionMode = 'timed';
 const timers = new Set();
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -44,6 +48,46 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === 'POST') {
+    if (req.url === '/v1/audio/transcriptions') {
+      const pieces = [];
+      for await (const chunk of req) pieces.push(chunk);
+      const form = await new Response(Buffer.concat(pieces), {
+        headers: { 'Content-Type': req.headers['content-type'] },
+      }).formData();
+      const file = form.get('file');
+      const data = await file.arrayBuffer();
+      transcriptions.push({
+        model: form.get('model'),
+        format: form.get('response_format'),
+        authorization: req.headers.authorization,
+        size: data.byteLength,
+        header: Buffer.from(data).subarray(0, 4).toString(),
+      });
+      const mode = transcriptionMode;
+      const reply = () => {
+        if (res.destroyed) return;
+        if (mode === 'error') res.writeHead(429).end('private-asr-diagnostics');
+        else
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(
+            JSON.stringify(
+              mode === 'plain'
+                ? { text: 'B 站音轨转写的纯文字证据' }
+                : {
+                    text: 'B 站音轨转写的独立证据',
+                    segments: [{ start: 0.2, end: 1.8, text: 'B 站音轨转写的独立证据' }],
+                  },
+            ),
+          );
+      };
+      if (mode === 'slow') {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          reply();
+        }, 4000);
+        timers.add(timer);
+      } else reply();
+      return;
+    }
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
@@ -158,7 +202,7 @@ try {
     // same persistent window. Keep dimensions identical until drawer tests end.
     viewport: { width: 420, height: 820 },
   });
-  const worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
+  let worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
   const extensionId = new URL(worker.url()).host;
   const extensionUrl = `chrome-extension://${extensionId}`;
   context.on('page', (page) =>
@@ -391,6 +435,235 @@ try {
       await video.close();
     }
   });
+  await step(
+    'Bilibili audio downloads, decodes, transcribes, persists, reconnects and stops without recording',
+    async () => {
+      const videoUrl = 'https://www.bilibili.com/video/BV1audioTest99/?p=2';
+      const audioFixture = await readFile(path.join(root, 'tests/fixtures/bilibili-audio.m4a'));
+      let audioDownloads = 0;
+      await context.unroute('https://api.bilibili.com/**');
+      await context.route('https://api.bilibili.com/**', async (route) => {
+        const url = new URL(route.request().url());
+        const data = url.pathname.endsWith('/view')
+          ? {
+              bvid: 'BV1audioTest99',
+              title: '无字幕音轨验收',
+              pages: [
+                { page: 1, cid: 111, part: '第一部分', duration: 2 },
+                { page: 2, cid: 222, part: '第二部分', duration: 2 },
+              ],
+            }
+          : url.pathname.endsWith('/playurl')
+            ? {
+                timelength: 2000,
+                dash: {
+                  audio: [
+                    {
+                      bandwidth: 32000,
+                      mimeType: 'audio/mp4',
+                      baseUrl:
+                        'https://audio-test.bilivideo.com/audio.m4s?token=ephemeral-audio-token',
+                    },
+                  ],
+                },
+              }
+            : { cid: Number(url.searchParams.get('cid')), subtitle: { subtitles: [] } };
+        await route.fulfill({
+          headers: {
+            'Access-Control-Allow-Origin': 'https://www.bilibili.com',
+            'Access-Control-Allow-Credentials': 'true',
+          },
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 0, data }),
+        });
+      });
+      // Offscreen pages are not Playwright Page objects. Intercept their requests
+      // on their CDP target without weakening production URL validation.
+      const audioCdp = await context.newCDPSession(options);
+      const targets = await audioCdp.send('Target.getTargets');
+      const target = targets.targetInfos.find(
+        (item) => item.url === `${extensionUrl}/offscreen.html`,
+      );
+      expect(target).toBeTruthy();
+      const { sessionId: audioSession } = await audioCdp.send('Target.attachToTarget', {
+        targetId: target.targetId,
+        flatten: false,
+      });
+      let audioCommand = 0;
+      const sendAudio = (method, params) =>
+        audioCdp.send('Target.sendMessageToTarget', {
+          sessionId: audioSession,
+          message: JSON.stringify({ id: ++audioCommand, method, params }),
+        });
+      audioCdp.on('Target.receivedMessageFromTarget', ({ sessionId, message }) => {
+        if (sessionId !== audioSession) return;
+        const event = JSON.parse(message);
+        if (event.method === 'Fetch.requestPaused') {
+          audioDownloads++;
+          void sendAudio('Fetch.fulfillRequest', {
+            requestId: event.params.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: 'Content-Type', value: 'audio/mp4' }],
+            body: audioFixture.toString('base64'),
+          });
+        }
+      });
+      await sendAudio('Fetch.enable', {
+        patterns: [{ urlPattern: 'https://audio-test.bilivideo.com/*' }],
+      });
+      const video = await context.newPage();
+      await video.goto(videoUrl);
+      const videoTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        videoUrl,
+      );
+      let videoPanel = await openPanel(videoTabId);
+      try {
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('alert')).toContainText('语音转写');
+        expect(transcriptions).toHaveLength(0);
+        expect(audioDownloads).toBe(0);
+        await options.getByRole('button', { name: '语音转写', exact: true }).click();
+        await options.getByRole('checkbox', { name: '启用 B 站音轨转写' }).check();
+        await options.getByLabel('转写 Base URL').fill(`${baseUrl}/v1`);
+        await options.getByLabel('转写 API Key').fill('asr-test-only-secret');
+        await options.getByLabel('转写模型 ID').fill('asr-test');
+        await options.getByLabel('转写响应格式').selectOption('verbose_json');
+        await options.getByRole('button', { name: '保存转写设置并授权' }).click();
+        await expect(options.getByRole('status')).toContainText('转写设置已保存');
+        await capture(options, 'transcription-settings.png', true);
+        const forbidden = await options.evaluate(
+          async (tabId) =>
+            chrome.runtime.sendMessage({
+              channel: 'glintab:audio',
+              tabId,
+              pageKey: '',
+              streamId: 'forged',
+            }),
+          videoTabId,
+        );
+        expect(forbidden.ok).toBe(false);
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('button', { name: '查看转写' })).toBeVisible({
+          timeout: 15000,
+        });
+        expect(transcriptions).toHaveLength(1);
+        expect(transcriptions[0]).toMatchObject({
+          model: 'asr-test',
+          format: 'verbose_json',
+          authorization: 'Bearer asr-test-only-secret',
+          header: 'RIFF',
+        });
+        expect(transcriptions[0].size).toBeGreaterThan(60000);
+        expect(requests.at(-1).messages[0].content).toContain('B 站音轨转写的独立证据');
+        expect(requests.at(-1).messages[0].content).toContain('p=2&t=0');
+        await videoPanel.getByRole('button', { name: '查看转写' }).click();
+        await expect(videoPanel.getByRole('dialog')).toContainText('音轨自动转写');
+        await capture(videoPanel, 'bilibili-audio-transcript.png');
+        await videoPanel.keyboard.press('Escape');
+        await videoPanel.getByRole('textbox', { name: '向当前视频提问' }).fill('解释音轨中的证据');
+        await videoPanel.getByRole('button', { name: '发送问题' }).click();
+        await expect(videoPanel.getByRole('button', { name: '编辑问题' })).toBeVisible();
+        expect(transcriptions).toHaveLength(1);
+        const stored = await worker.evaluate(() => chrome.storage.local.get(null));
+        const histories = Object.fromEntries(
+          Object.entries(stored).filter(([key]) => key.startsWith('conversation:')),
+        );
+        expect(JSON.stringify(histories)).not.toContain('ephemeral-audio-token');
+        expect(JSON.stringify(histories)).not.toContain('asr-test-only-secret');
+        transcriptionMode = 'plain';
+        await video.goto(videoUrl.replace('p=2', 'p=1'));
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('button', { name: '查看转写' })).toBeVisible();
+        expect(requests.at(-1).messages[0].content).toContain('No timestamp data is available');
+        await videoPanel.getByRole('button', { name: '查看转写' }).click();
+        await expect(videoPanel.getByRole('dialog')).toContainText('无时间戳');
+        await expect(videoPanel.getByRole('dialog').locator('a')).toHaveCount(0);
+        await videoPanel.keyboard.press('Escape');
+        transcriptionMode = 'slow';
+        const slowUrl = `${videoUrl}&test=stop`;
+        await video.goto(slowUrl);
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        const before = requests.length;
+        const asrBefore = transcriptions.length;
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect.poll(() => transcriptions.length).toBe(asrBefore + 1);
+        await videoPanel.close();
+        videoPanel = await openPanel(videoTabId);
+        await expect(videoPanel.locator('.generation-status')).toContainText('正在转写音频');
+        await videoPanel.getByRole('button', { name: '停止生成' }).click();
+        await expect(videoPanel.getByRole('button', { name: '停止生成' })).toHaveCount(0);
+        expect(requests.length).toBe(before);
+        transcriptionMode = 'error';
+        await video.goto(`${videoUrl}&test=error`);
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('alert')).toContainText('HTTP 429');
+        await expect(videoPanel.getByRole('alert')).not.toContainText('private-asr-diagnostics');
+        expect(requests.length).toBe(before);
+        transcriptionMode = 'timed';
+        await video.goto(`${videoUrl}&test=retry`);
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('button', { name: '查看转写' })).toBeVisible();
+        transcriptionMode = 'slow';
+        const navUrl = `${videoUrl}&test=navigation`;
+        await video.goto(navUrl);
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        const navBefore = transcriptions.length;
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect.poll(() => transcriptions.length).toBe(navBefore + 1);
+        await worker.evaluate(() => {
+          self.__glintabRestartProbe = true;
+        });
+        await audioCdp.send('ServiceWorker.enable');
+        await audioCdp.send('ServiceWorker.stopAllWorkers');
+        await expect
+          .poll(async () =>
+            options
+              .evaluate(() =>
+                chrome.runtime.sendMessage({
+                  channel: 'glintab:rpc',
+                  request: { type: 'config:get' },
+                }),
+              )
+              .catch(() => null),
+          )
+          .toMatchObject({ ok: true });
+        worker =
+          context.serviceWorkers().find((item) => item.url().startsWith(extensionUrl)) ||
+          (await context.waitForEvent('serviceworker'));
+        await expect
+          .poll(() => worker.evaluate(() => self.__glintabRestartProbe).catch(() => 'unavailable'))
+          .toBeUndefined();
+        await video.goto(`${videoUrl}&test=changed`);
+        await expect
+          .poll(async () => {
+            const result = await options.evaluate(
+              async ({ tabId, key }) =>
+                chrome.runtime.sendMessage({
+                  channel: 'glintab:rpc',
+                  request: { type: 'task:snapshot', tabId, pageKey: key },
+                }),
+              { tabId: videoTabId, key: navUrl },
+            );
+            return result.data?.status;
+          })
+          .toBe('stopped');
+      } catch (error) {
+        console.error('AUDIO TEST ERROR', error.message);
+        console.error('AUDIO TEST PAGE', await videoPanel.locator('body').innerText());
+        throw error;
+      } finally {
+        transcriptionMode = 'timed';
+        await videoPanel.close();
+        await video.close();
+        await audioCdp.detach();
+        await options.getByRole('button', { name: 'AI 供应商', exact: true }).click();
+      }
+    },
+  );
   await step(
     'ungranted sites offer one-time all-sites access and preserve the question',
     async () => {

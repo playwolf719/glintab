@@ -26,20 +26,30 @@ export function ContentDialog({ source, onClose }: { source: PageSource; onClose
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return (
-    <Modal title={source.video ? '提取的视频字幕' : '提取的网页内容'} onClose={onClose} wide>
+    <Modal
+      title={
+        source.video?.transcription
+          ? '音轨转写内容'
+          : source.video
+            ? '提取的视频字幕'
+            : '提取的网页内容'
+      }
+      onClose={onClose}
+      wide
+    >
       <div className="content-meta">
         <strong>{source.title}</strong>
         <span>
           {source.content.length.toLocaleString()} 字符{source.truncated ? ' · 已截断' : ''}
           {source.video
-            ? ` · ${source.video.language} · ${source.video.automatic ? '自动字幕，可能有误' : '字幕'}${source.video.part ? ` · P${source.video.part}` : ''}`
+            ? ` · ${source.video.language} · ${source.video.transcription ? `音轨自动转写，可能有误${source.video.timestamps === false ? ' · 无时间戳' : ''}` : source.video.automatic ? '自动字幕，可能有误' : '字幕'}${source.video.part ? ` · P${source.video.part}` : ''}`
             : source.fallback
               ? ' · 整页提取'
               : ' · 正文提取'}
         </span>
         <span>{new Date(source.extractedAt).toLocaleString()}</span>
       </div>
-      {source.video ? (
+      {source.video && source.video.timestamps !== false ? (
         <div className="source-text">
           {source.video.segments.map((segment, index) => (
             <p key={index}>

@@ -5,8 +5,16 @@ import { extractionInjectionError, providerOrigin } from '../lib/platform/permis
 import { isReadableUrl, pageKey } from '../lib/domain/page';
 import { summaryPrompt } from '../lib/domain/settings';
 import { validateReasoningEffort } from '../lib/domain/reasoning';
+import {
+  AUDIO_ORIGINS,
+  audioUrl,
+  MAX_AUDIO_SECONDS,
+  validateTranscription,
+} from '../lib/domain/transcription';
+import { videoTarget } from '../lib/domain/video';
 import { extractorFor } from '../lib/extraction/registry';
 import { readVideoPage } from '../lib/extraction/video-page';
+import { readBilibiliAudio } from '../lib/extraction/bilibili-audio';
 import { videoSource } from '../lib/extraction/video';
 import { listModels } from '../lib/llm/client';
 import { browserAccounts } from '../lib/auth/chatgpt';
@@ -46,6 +54,7 @@ export default defineBackground(() => {
   );
   chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
     for (const url of [change.url, tab.pendingUrl, tab.url]) if (url) observeAuth(tabId, url);
+    if (change.url || tab.pendingUrl) void cancelDepartedAudio(tabId).catch(() => {});
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
     void authReady.then(() => accounts.closed(tabId)).catch(() => {});
@@ -87,9 +96,9 @@ export default defineBackground(() => {
       if (!contexts.length)
         await chrome.offscreen.createDocument({
           url: 'offscreen.html',
-          reasons: [chrome.offscreen.Reason.WORKERS],
+          reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.BLOBS],
           justification:
-            'Host the reading task engine and its worker independently of the visible panel lifecycle.',
+            'Host the reading worker and decode downloaded audio for transcription independently of the visible panel.',
         });
     })();
     try {
@@ -117,6 +126,23 @@ export default defineBackground(() => {
   }
   function engine<T>(request: EngineRequest): Promise<T> {
     return serializeEngine(() => dispatchEngine<T>(request));
+  }
+  async function cancelDepartedAudio(tabId: number, closed = false) {
+    if (!(await chrome.offscreen.hasDocument())) return;
+    // Query the surviving engine rather than a background-memory index: MV3 can
+    // restart this worker while a transcription remains active in offscreen.
+    const tasks = await engine<TaskSnapshot[]>({ target: 'engine', type: 'active' });
+    const tab = closed ? undefined : await chrome.tabs.get(tabId).catch(() => undefined);
+    for (const snapshot of tasks) {
+      if (
+        snapshot.tabId !== tabId ||
+        snapshot.conversation.source.video?.transcription !== 'required'
+      )
+        continue;
+      const sourceUrl = snapshot.conversation.source.url;
+      if (!tab || tab.url !== sourceUrl || (tab.pendingUrl && tab.pendingUrl !== sourceUrl))
+        await engine({ target: 'engine', type: 'cancel', tabId, streamId: snapshot.streamId });
+    }
   }
   async function validateProvider(provider: Provider) {
     validateReasoningEffort(provider.reasoningEffort);
@@ -271,6 +297,19 @@ export default defineBackground(() => {
         });
       case 'settings:save':
         return repository.saveSettings(request.settings);
+      case 'transcription:save': {
+        const config = validateTranscription(request.config);
+        if (
+          config.enabled &&
+          !(await chrome.permissions.contains({
+            origins: [providerOrigin(config.baseUrl), ...AUDIO_ORIGINS],
+          }))
+        )
+          throw new Error('缺少转写服务或 B 站音轨域名权限，请重新保存并授权。');
+        if (!config.enabled)
+          await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1001] });
+        return repository.updateConfig((current) => ({ ...current, transcription: config }));
+      }
       case 'models:list': {
         const origin = providerOrigin(request.provider.baseUrl);
         if (!(await chrome.permissions.contains({ origins: [origin] })))
@@ -304,12 +343,25 @@ export default defineBackground(() => {
             ? summaryPrompt(request.conversation.source, config.settings)
             : request.question;
           if (!question.trim()) throw new Error('请输入问题或在设置中填写摘要指令。');
-          if (!request.conversation.source.content.trim())
+          const needsAudio = request.conversation.source.video?.transcription === 'required';
+          if (
+            needsAudio &&
+            (!config.transcription?.enabled || videoTarget(tab.url || '')?.platform !== 'bilibili')
+          )
+            throw new Error('当前分 P 没有字幕。请在设置 → 语音转写中配置并启用 B 站音轨转写。');
+          if (needsAudio) validateTranscription(config.transcription!);
+          if (!request.conversation.source.content.trim() && !needsAudio)
             throw new Error('没有可用正文，请重新提取。');
           return dispatchEngine({
             target: 'engine',
             type: 'start',
-            task: { ...request, question, provider, settings: config.settings },
+            task: {
+              ...request,
+              question,
+              provider,
+              settings: config.settings,
+              transcription: needsAudio ? config.transcription : undefined,
+            },
           });
         });
       case 'task:snapshot':
@@ -346,6 +398,7 @@ export default defineBackground(() => {
         return serializeEngine(async () => {
           const tasks = await dispatchEngine<TaskSnapshot[]>({ target: 'engine', type: 'active' });
           if (tasks.length) throw new Error('请先停止所有页面的生成任务，再清除数据。');
+          await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1001] });
           await chrome.offscreen.closeDocument();
           return accounts.clear();
         });
@@ -381,6 +434,120 @@ export default defineBackground(() => {
             throw new Error('ChatGPT 连接未保存或已删除。');
           return accounts.credentials(message.connectionId, message.rejectedRevision);
         }),
+      );
+    }
+    if (message?.channel === 'glintab:audio') {
+      if (
+        !extensionPage(sender, ['/offscreen.html']) ||
+        !Number.isInteger(message.tabId) ||
+        typeof message.pageKey !== 'string' ||
+        typeof message.streamId !== 'string'
+      ) {
+        respond({ ok: false, error: '无权获取视频音轨。' });
+        return;
+      }
+      return send(
+        (async () => {
+          const snapshot = await engine<TaskSnapshot | null>({
+            target: 'engine',
+            type: 'snapshot',
+            tabId: message.tabId,
+            pageKey: message.pageKey,
+          });
+          if (
+            !snapshot ||
+            snapshot.status !== 'running' ||
+            snapshot.streamId !== message.streamId ||
+            snapshot.conversation.source.video?.transcription !== 'required'
+          )
+            throw new Error('音轨任务已结束或与来源不匹配。');
+          const source = snapshot.conversation.source;
+          const target = videoTarget(source.url);
+          const tab = await chrome.tabs.get(message.tabId);
+          if (
+            target?.platform !== 'bilibili' ||
+            tab.url !== source.url ||
+            (tab.pendingUrl && tab.pendingUrl !== source.url) ||
+            pageKey(source.url) !== message.pageKey
+          )
+            throw new Error('视频页面已变化，已停止获取音轨。');
+          if (!(await chrome.permissions.contains({ origins: AUDIO_ORIGINS })))
+            throw new Error('缺少 B 站音轨访问权限，请在语音转写设置中重新保存并授权。');
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const results = await Promise.race([
+            chrome.scripting.executeScript({
+              target: { tabId: message.tabId },
+              world: 'MAIN',
+              func: readBilibiliAudio,
+              args: [source.url, target.videoId, target.part!],
+            }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error('B 站音轨信息获取超时，请重试。')), 15000);
+            }),
+          ]).finally(() => clearTimeout(timer));
+          const result = results.find((item) => item.frameId === 0)?.result;
+          const current = await chrome.tabs.get(message.tabId);
+          const active = await engine<TaskSnapshot | null>({
+            target: 'engine',
+            type: 'snapshot',
+            tabId: message.tabId,
+            pageKey: message.pageKey,
+          });
+          if (
+            !active ||
+            active.status !== 'running' ||
+            active.streamId !== message.streamId ||
+            current.url !== source.url ||
+            (current.pendingUrl && current.pendingUrl !== source.url)
+          )
+            throw new Error('音轨任务已停止或视频已变化。');
+          if (!result?.ok || !result.data) throw new Error(result?.error || 'B 站未返回音轨。');
+          const audio = result.data;
+          if (
+            audio.url !== source.url ||
+            audio.videoId !== target.videoId ||
+            audio.part !== target.part ||
+            !Number.isSafeInteger(audio.cid) ||
+            audio.cid <= 0 ||
+            !Number.isFinite(audio.duration) ||
+            audio.duration <= 0 ||
+            audio.duration > MAX_AUDIO_SECONDS
+          )
+            throw new Error('音轨来源或时长无效。');
+          // Scope Referer solely to this extension's audio CDN requests, never website requests.
+          await chrome.declarativeNetRequest.updateSessionRules({
+            removeRuleIds: [1001],
+            addRules: [
+              {
+                id: 1001,
+                priority: 1,
+                action: {
+                  type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+                  requestHeaders: [
+                    {
+                      header: 'Referer',
+                      operation: chrome.declarativeNetRequest.HeaderOperation.SET,
+                      value: 'https://www.bilibili.com/',
+                    },
+                  ],
+                },
+                condition: {
+                  initiatorDomains: [chrome.runtime.id],
+                  requestDomains: ['bilivideo.com', 'bilivideo.cn'],
+                  resourceTypes: [chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST],
+                },
+              },
+            ],
+          });
+          return {
+            url: source.url,
+            videoId: target.videoId,
+            part: target.part,
+            cid: audio.cid,
+            duration: audio.duration,
+            audioUrl: audioUrl(audio.audioUrl),
+          };
+        })(),
       );
     }
     if (message?.channel === 'glintab:rpc') {
@@ -453,6 +620,7 @@ export default defineBackground(() => {
     })();
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
+    void cancelDepartedAudio(tabId, true).catch(() => {});
     const pending = pendingExtractions.get(tabId);
     if (pending) {
       clearTimeout(pending.timer);

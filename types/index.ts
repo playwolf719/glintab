@@ -25,6 +25,22 @@ export interface AppConfig {
   providers: Provider[];
   currentProviderId: string | null;
   settings: Settings;
+  transcription?: TranscriptionConfig;
+}
+export interface TranscriptionConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  responseFormat: 'json' | 'verbose_json';
+}
+export interface BilibiliAudio {
+  url: string;
+  videoId: string;
+  part: number;
+  cid: number;
+  duration: number;
+  audioUrl: string;
 }
 export interface PageSource {
   pageKey: string;
@@ -50,6 +66,8 @@ export interface VideoSource {
   language: string;
   automatic: boolean;
   segments: SubtitleSegment[];
+  transcription?: 'required' | 'complete';
+  timestamps?: boolean;
 }
 // MAIN-world output is untrusted and is validated again in the background.
 export interface VideoPageResult {
@@ -59,7 +77,7 @@ export interface VideoPageResult {
   part?: number;
   language: string;
   automatic: boolean;
-  format: 'youtube-json3' | 'segments';
+  format: 'youtube-json3' | 'segments' | 'bilibili-audio-required';
   body: string;
 }
 export interface ChatMessage {
@@ -85,6 +103,7 @@ export interface TaskSnapshot {
   status: 'running' | 'done' | 'error' | 'stopped';
   conversation: Conversation;
   error?: string;
+  progress?: string;
 }
 export interface StartTask {
   streamId: string;
@@ -95,6 +114,7 @@ export interface StartTask {
   question: string;
   summary: boolean;
   editMessageId?: string;
+  transcription?: TranscriptionConfig;
 }
 export interface EngineEvent {
   channel: 'glintab:event';
@@ -111,6 +131,7 @@ export type Request =
   | { type: 'provider:delete'; id: string }
   | { type: 'provider:select'; id: string }
   | { type: 'settings:save'; settings: Settings }
+  | { type: 'transcription:save'; config: TranscriptionConfig }
   | { type: 'models:list'; provider: Provider }
   | { type: 'page:extract'; tabId: number; expectedPageKey: string }
   | { type: 'conversation:get'; pageKey: string }
@@ -175,4 +196,13 @@ export interface AuthCredentialRequest {
   channel: 'glintab:auth';
   connectionId: string;
   rejectedRevision?: string;
+}
+export interface AudioSourceRequest {
+  channel: 'glintab:audio';
+  tabId: number;
+  pageKey: string;
+  streamId: string;
+}
+export interface PreparedAudio {
+  chunks: { data: ArrayBuffer; offset: number; duration: number }[];
 }

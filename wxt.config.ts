@@ -16,6 +16,7 @@ export default defineConfig({
       'tabs',
       'alarms',
       'webNavigation',
+      'declarativeNetRequestWithHostAccess',
     ],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
     action: { default_title: '打开 Glintab' },

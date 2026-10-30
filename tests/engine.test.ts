@@ -15,6 +15,103 @@ const completeLater = () => {
   return { controls, complete };
 };
 describe('task lifetime and isolation', () => {
+  function audioTask(tabId = 1) {
+    const input = task(tabId);
+    input.conversation.source.content = '';
+    input.conversation.source.video = {
+      platform: 'bilibili',
+      videoId: 'BV1xx411c7mD',
+      part: 2,
+      language: 'und',
+      automatic: true,
+      segments: [],
+      transcription: 'required',
+      timestamps: false,
+    };
+    input.transcription = {
+      enabled: true,
+      baseUrl: 'https://asr.test/v1',
+      apiKey: 'never-in-snapshot',
+      model: 'test',
+      responseFormat: 'json',
+    };
+    return input;
+  }
+  it('persists a completed transcript before summarization and retains it when summary fails', async () => {
+    const events: EngineEvent[] = [];
+    const complete = vi
+      .fn<typeof streamCompletion>()
+      .mockRejectedValue(new Error('summary failed'));
+    const manager = new TaskManager(
+      async (event) => {
+        events.push(event);
+      },
+      complete,
+      async (input, _signal, progress) => {
+        progress('正在转写音频 · 1/1');
+        return {
+          ...input.conversation.source,
+          content: '音轨实际证据',
+          video: { ...input.conversation.source.video!, transcription: 'complete' },
+        };
+      },
+    );
+    const input = audioTask();
+    manager.start(input);
+    await vi.waitFor(() => expect(manager.active()).toHaveLength(0));
+    expect(
+      events.some(
+        (event) =>
+          event.persist &&
+          event.snapshot.status === 'running' &&
+          event.snapshot.conversation.source.content === '音轨实际证据',
+      ),
+    ).toBe(true);
+    expect(manager.get(1, input.conversation.source.pageKey)?.conversation.source.content).toBe(
+      '音轨实际证据',
+    );
+    expect(JSON.stringify(events)).not.toContain('never-in-snapshot');
+    expect(manager.get(1, input.conversation.source.pageKey)?.progress).toBeUndefined();
+  });
+  it('stops audio preparation and ignores old cancellation while another tab continues', async () => {
+    const { complete, controls } = completeLater();
+    const prepare = vi.fn(
+      (_input, signal: AbortSignal) =>
+        new Promise<never>((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+        ),
+    );
+    const manager = new TaskManager(async () => {}, complete, prepare);
+    const input = audioTask();
+    manager.start(input);
+    manager.start(task(2));
+    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    manager.cancel(1, 'old-stream');
+    expect(manager.get(1, input.conversation.source.pageKey)?.status).toBe('running');
+    manager.cancel(1, input.streamId);
+    await vi.waitFor(() =>
+      expect(manager.get(1, input.conversation.source.pageKey)?.status).toBe('stopped'),
+    );
+    expect(manager.active()).toHaveLength(1);
+    controls[0]!.finish();
+    await vi.waitFor(() => expect(manager.active()).toHaveLength(0));
+  });
+  it('does not download or transcribe when the initial local save fails', async () => {
+    const prepare = vi.fn();
+    const complete = vi.fn<typeof streamCompletion>();
+    const manager = new TaskManager(
+      async () => {
+        throw new Error('storage unavailable');
+      },
+      complete,
+      prepare,
+    );
+    manager.start(audioTask());
+    await vi.waitFor(() => expect(manager.active()).toHaveLength(0));
+    expect(prepare).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
   it('deduplicates a retried stream and returns a recoverable snapshot', async () => {
     const { controls, complete } = completeLater();
     const manager = new TaskManager(async () => {}, complete);

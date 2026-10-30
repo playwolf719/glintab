@@ -1,9 +1,11 @@
-import type { EngineEvent, EngineRequest, RpcResponse } from '../../types';
+import type { BilibiliAudio, EngineEvent, EngineRequest, RpcResponse } from '../../types';
 import { errorText } from '../../lib/platform/rpc';
+import { prepareAudio } from '../../lib/engine/audio';
 
 // Bridge Chrome runtime messaging to a dedicated worker, using the WORKERS reason.
 let worker: Worker | null = null;
 let engineError: string | null = null;
+const audioJobs = new Map<string, AbortController>();
 try {
   worker = new Worker(chrome.runtime.getURL('/engine-worker.js'));
 } catch {
@@ -15,7 +17,45 @@ const waiting = new Map<
 >();
 if (worker)
   worker.onmessage = (event: MessageEvent) => {
-    if (event.data.kind === 'auth') {
+    if (event.data.kind === 'cancel-audio') {
+      audioJobs.get(event.data.id)?.abort();
+    } else if (event.data.kind === 'prepare-audio') {
+      const { id, request } = event.data;
+      if (audioJobs.size) {
+        worker?.postMessage({
+          kind: 'audio-result',
+          id,
+          error: '另一个音轨正在下载或解码，请稍后重试。',
+        });
+        return;
+      }
+      const controller = new AbortController();
+      audioJobs.set(id, controller);
+      void (async () => {
+        try {
+          const response: RpcResponse<BilibiliAudio> = await chrome.runtime.sendMessage(request);
+          controller.signal.throwIfAborted();
+          if (!response.ok || !response.data)
+            throw new Error(response.error || '无法获取音轨信息。');
+          const audio = await prepareAudio(response.data, controller.signal, (text) =>
+            worker?.postMessage({ kind: 'audio-progress', id, text }),
+          );
+          controller.signal.throwIfAborted();
+          worker?.postMessage(
+            { kind: 'audio-result', id, audio },
+            audio.chunks.map((chunk) => chunk.data),
+          );
+        } catch (error) {
+          worker?.postMessage({
+            kind: 'audio-result',
+            id,
+            error: controller.signal.aborted ? '已停止音轨处理。' : errorText(error),
+          });
+        } finally {
+          audioJobs.delete(id);
+        }
+      })();
+    } else if (event.data.kind === 'auth') {
       // Credentials only travel between background and this dedicated worker.
       void chrome.runtime
         .sendMessage(event.data.request)
@@ -59,6 +99,7 @@ if (worker)
   worker.onerror = (event) => {
     event.preventDefault();
     engineError = '任务引擎异常，请重新加载扩展。';
+    for (const controller of audioJobs.values()) controller.abort();
     for (const { respond, timer } of waiting.values()) {
       clearTimeout(timer);
       respond({ ok: false, error: engineError });

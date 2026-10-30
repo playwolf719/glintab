@@ -20,6 +20,29 @@ export function videoSource(input: VideoPageResult, expectedUrl: string): PageSo
     typeof input.automatic !== 'boolean'
   )
     throw new Error('字幕数据无效，请刷新后重试。');
+  if (
+    input.format === 'bilibili-audio-required' &&
+    target.platform === 'bilibili' &&
+    input.body === ''
+  )
+    return {
+      pageKey: pageKey(expectedUrl),
+      url: expectedUrl,
+      title: input.title.slice(0, 500),
+      content: '',
+      originalLength: 0,
+      truncated: false,
+      extractedAt: Date.now(),
+      fallback: false,
+      video: {
+        ...target,
+        language: 'und',
+        automatic: true,
+        segments: [],
+        transcription: 'required',
+        timestamps: false,
+      },
+    };
   let raw: unknown;
   try {
     raw = JSON.parse(input.body);

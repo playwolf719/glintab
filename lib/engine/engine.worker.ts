@@ -4,11 +4,21 @@ import type {
   RpcResponse,
   ChatGPTCredentials,
   AuthCredentialRequest,
+  PreparedAudio,
 } from '../../types';
 import { errorText } from '../platform/rpc';
 import { streamCompletion } from '../llm/client';
+import { transcribeAudio } from '../llm/transcription';
 
 export function startEngineWorker() {
+  const audioPending = new Map<
+    string,
+    {
+      resolve(audio: PreparedAudio): void;
+      reject(error: Error): void;
+      progress(text: string): void;
+    }
+  >();
   const pending = new Map<
     string,
     { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -62,9 +72,49 @@ export function startEngineWorker() {
               })
           : undefined,
       ),
+    async (input, signal, progress) => {
+      signal.throwIfAborted();
+      if (!input.transcription) throw new Error('请先配置转写服务。');
+      const id = crypto.randomUUID();
+      let abort: () => void;
+      const audio = await new Promise<PreparedAudio>((resolve, reject) => {
+        abort = () => {
+          audioPending.delete(id);
+          postMessage({ kind: 'cancel-audio', id });
+          reject(signal.reason);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        audioPending.set(id, { resolve, reject, progress });
+        postMessage({
+          kind: 'prepare-audio',
+          id,
+          request: {
+            channel: 'glintab:audio',
+            tabId: input.tabId,
+            pageKey: input.conversation.source.pageKey,
+            streamId: input.streamId,
+          },
+        });
+      }).finally(() => signal.removeEventListener('abort', abort));
+      return transcribeAudio(
+        input.conversation.source,
+        audio,
+        input.transcription,
+        signal,
+        progress,
+      );
+    },
   );
   self.onmessage = (event: MessageEvent) => {
-    if (event.data.kind === 'auth-result') {
+    if (event.data.kind === 'audio-progress') {
+      audioPending.get(event.data.id)?.progress(event.data.text);
+    } else if (event.data.kind === 'audio-result') {
+      const waiting = audioPending.get(event.data.id);
+      if (!waiting) return;
+      audioPending.delete(event.data.id);
+      if (event.data.audio) waiting.resolve(event.data.audio);
+      else waiting.reject(new Error(event.data.error || '音轨准备失败。'));
+    } else if (event.data.kind === 'auth-result') {
       const waiting = authPending.get(event.data.id);
       if (!waiting) return;
       clearTimeout(waiting.timer);
