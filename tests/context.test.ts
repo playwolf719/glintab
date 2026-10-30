@@ -32,3 +32,21 @@ it('rejects a question that cannot fit instead of silently truncating it', () =>
   value.messages = [{ id: '1', role: 'user', content: '问'.repeat(10000) }];
   expect(() => buildContext(value, provider, DEFAULT_CONFIG.settings)).toThrow('问题过长');
 });
+it('grounds video answers in captions and supplied timestamps, preserving context budgets', () => {
+  const value = conversation('https://www.youtube.com/watch?v=abcdefghijk');
+  value.source.video = {
+    platform: 'youtube',
+    videoId: 'abcdefghijk',
+    language: 'en',
+    automatic: true,
+    segments: [{ start: 65, end: 70, text: 'Caption evidence' }],
+  };
+  value.source.content =
+    '[01:05](https://www.youtube.com/watch?v=abcdefghijk&t=65s) Caption evidence';
+  value.messages = [{ id: 'q', role: 'user', content: '总结这个视频' }];
+  const result = buildContext(value, provider, DEFAULT_CONFIG.settings);
+  expect(result.system).toContain('automatically generated; may contain errors');
+  expect(result.system).toContain('do not claim to have watched visuals');
+  expect(result.system).toContain('Never invent timestamps');
+  expect(result.system).toContain(value.source.content);
+});

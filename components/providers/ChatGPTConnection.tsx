@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, LoaderCircle, LogIn } from 'lucide-react';
 import type { Provider } from '../../types';
+import { DEFAULT_CONTEXT_LIMIT } from '../../config/defaults';
 import {
   CHATGPT_PERMISSION_ORIGINS,
   CHATGPT_PROVIDER_URL,
@@ -48,7 +49,8 @@ export function ChatGPTConnection({
             name: initial.current?.name || `ChatGPT · ${connection.email}`,
             createdAt: initial.current?.createdAt || Date.now(),
             model: initial.current?.model || '',
-            contextLimit: initial.current?.contextLimit || 32768,
+            contextLimit: initial.current?.contextLimit || DEFAULT_CONTEXT_LIMIT,
+            reasoningEffort: initial.current?.reasoningEffort,
             apiFormat: 'openai_responses',
             baseUrl: CHATGPT_PROVIDER_URL,
             apiKey: '',

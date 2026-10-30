@@ -20,7 +20,7 @@ components/
 lib/
   auth/                PKCE、身份验证、授权状态机和令牌刷新
   domain/              URL 规范化、上下文预算等无浏览器依赖规则
-  extraction/          Readability + Markdown、提取器注册表
+  extraction/          Readability + Markdown、视频字幕、提取器注册表
   engine/              独立 Worker 和可注入依赖的 TaskManager
   llm/                 协议适配、HTTP 调用、模型列表、增量 SSE 解析
   config/              JSON / TOML 配置字段映射
@@ -82,7 +82,11 @@ Worker 使用 WXT unlisted script 单独构建，通过 `chrome.runtime.getURL('
 - API Key 未加密；本地存储设为 `TRUSTED_CONTEXTS`，不向内容脚本开放。
 - 相同 URL 的跨标签页历史采用最后保存结果；如需严格独立历史，新增索引与迁移，不要只修改任务键。
 
-当前 schema 为 1。变更存储结构时增加显式迁移，在仓储层处理旧版本；不要在 React 组件内散落兼容判断。数据规模增加后可替换 `StorageDriver` 为 IndexedDB，保留上层仓储契约。
+当前配置 schema 为 2。`Repository.config()` 在写入队列内将 schema 1 迁移为 2：保留供应商、回答语言、网页自定义指令和内容显示设置，补上独立 `videoPrompt` 并持久化；迁移失败会报错且保留旧记录，后续可重试。配置内部读写共用 `loadConfig`，避免在队列内再次排队造成死锁。新安装读取默认值不落盘，清除数据后仍保持空存储。未来版本不静默覆盖。
+
+变更存储结构时增加显式迁移，在仓储层处理旧版本；不要在 React 组件内散落兼容判断。数据规模增加后可替换 `StorageDriver` 为 IndexedDB，保留上层仓储契约。
+
+摘要设置中的 `webPrompt` / `videoPrompt` 分开保存，由 `lib/domain/settings.ts` 校验非空、12,000 字符上限和设置字段；写入仍只经后台 Repository。`task:start` 在后台读取最新保存的配置，按已提取来源是否有 `video` 选择指令，覆盖摘要任务的问题后交给引擎；普通提问保留输入。UI 不决定最终指令，已打开面板无需重开即可使用新设置。自定义指令不替换系统中的来源与字幕约束，不修改已保存的旧回答。
 
 ## 新增功能的落点
 
@@ -92,9 +96,23 @@ Worker 使用 WXT unlisted script 单独构建，通过 `chrome.runtime.getURL('
 
 预设只放地址、协议等可编辑模板。模型名称由用户填写或列表获取，不作为实时能力声明。Chat / Responses 的 Base URL 不自动补 `/v1`；Anthropic 统一处理版本段。
 
+API Key 供应商的可选 `stream` 字段控制请求中的 `stream`：旧记录未设置时等价于 `true`，明确关闭时使用 `false`，现有完整 JSON 解析路径一次返回文本。该字段为向后兼容的可选能力，不改变配置 schema 2，也不按模型名称硬编码协议切换；由用户根据服务商要求配置。ChatGPT 账号连接仍固定 `store:false / stream:true`。
+
+供应商可选 `reasoningEffort` 由 `lib/domain/reasoning.ts` 校验枚举，未设置时省略请求参数，兼容旧配置且无需 schema 迁移。后台保存与任务启动均校验；协议层再次校验并映射：Chat Completions 使用 `reasoning_effort`，Responses / ChatGPT 账号使用 `reasoning.effort`，Anthropic 不发送这些字段。表单切换到 Anthropic 时清除该设置。字段仍经后台 Repository 保存，任务使用启动时的供应商快照，配置编辑不干扰并发任务、停止和凭证刷新；401 重试保留原请求参数。支持档位由用户按服务商确认，不按模型名称推测；不自动降档或重试被服务商拒绝的请求。参数依据 [OpenAI 官方推理文档](https://developers.openai.com/api/docs/guides/reasoning)。
+
+HTTP 400 错误正文最多读取 16,000 字节，1.5 秒后取消读取；仅将白名单参数名转成固定中文提示，不透传错误消息、未知参数或响应原文。无法解析时使用状态码提示，其他 HTTP 失败不读取正文并取消响应流。错误提示沿现有任务快照传播，失败任务仍保存终态并恢复输入，不自动更换模型或重试可能计费的请求。
+
 ### 新内容来源
 
-在 `lib/extraction/` 新建站点适配器并通过 `registry.ts` 分派，返回统一的 `PageSource`。专用脚本、权限和页面生命周期由 background 协调。YouTube / B 站需先加入真实字幕验证、超时和恢复，再解除注册表中的明确拒绝。
+在 `lib/extraction/` 新建站点适配器并通过 `registry.ts` 分派，返回统一的 `PageSource`。专用脚本、权限和页面生命周期由 background 协调。视频地址识别和时间戳规则放在 `lib/domain/video.ts`；普通页面仍使用 Readability。
+
+YouTube / B 站由 background 按需使用 `scripting.executeScript({ world: 'MAIN' })` 执行自包含的 `readVideoPage`，通过 Chrome 注入结果直接返回，不增加页面可调用的 runtime / postMessage 桥。函数不依赖外部运行时变量，不携带扩展配置或密钥，不安装网络钩子，不修改播放器状态。页面输出一律不可信，后台 `videoSource` 重新校验视频身份、分 P、格式、有限时间值和长度，再构造 `PageSource.video` 的分段时间模型及正文中的时间戳链接。新字段可选，已有会话无需迁移。
+
+YouTube 校验当前播放器响应的 videoId，选择轨道并读取 JSON3 或 XML；可复用当前视频、当前语言已请求的播放器字幕 URL。B 站重新请求 URL 对应的视频元信息，按 `p` 选择 cid，再访问 `/x/player/wbi/v2` 和受限的字幕 CDN 域名，不依赖可能滞后的 SPA 初始状态。此接口可能受登录、签名策略或风控影响，失败时明确提示，不降级为旧接口、弹幕或导航正文。
+
+页面请求沿用站点凭证，字幕 CDN 请求不携带凭证；不直接读取 Cookie。请求禁止重定向，总计 12 秒超时并中止 fetch，响应上限 4 MB；后台 15 秒兜底释放提取锁。每标签页只允许一次提取，视频结果绑定当前调用而不是共享的结果事件；后台返回前再次读取标签页 URL 和待导航地址，拒绝切页结果。旧调用的清理先比较 token，避免误删新锁，超时后可重新提取。字幕在完整片段边界截断至 120,000 字符，缓存只保留已纳入正文的分段，不保存带签名的字幕下载地址。
+
+自动测试覆盖模拟 JSON3 / XML / B 站字幕的解析、无字幕、登录限制、超时恢复、切页、分 P、下载域名和上下文预算，并在真实扩展中验证 MAIN → background → Worker 链路。真实站点验证状态单独记录在 `ACCEPTANCE.md`，不可将模拟通过解释为真实账号或全站视频验收。
 
 涉及 MAIN world 时将读取结果视为不可信输入，不从页面读取任意命令。临时网络钩子必须在 finally 恢复。视频字幕需独立的分段时间模型，不能直接把播放器导航文字当正文。
 

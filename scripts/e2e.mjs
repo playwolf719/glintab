@@ -15,12 +15,17 @@ await cp(
   extensionPath,
   { recursive: true },
 );
-// Only this disposable test copy grants loopback access at install time.
+// Only this disposable test copy grants loopback and mocked video origins at install time.
 // Production retains optional host permissions and the real user consent flow.
 const manifestPath = path.join(extensionPath, 'manifest.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 manifest.host_permissions = [
-  ...new Set([...(manifest.host_permissions || []), 'http://127.0.0.1/*']),
+  ...new Set([
+    ...(manifest.host_permissions || []),
+    'http://127.0.0.1/*',
+    'https://www.youtube.com/*',
+    'https://www.bilibili.com/*',
+  ]),
 ];
 await writeFile(manifestPath, JSON.stringify(manifest));
 await mkdir(artifactPath, { recursive: true });
@@ -44,11 +49,15 @@ const server = createServer(async (req, res) => {
     const body = JSON.parse(raw);
     requests.push(body);
     const question = body.messages?.at(-1)?.content || body.input?.at(-1)?.content || '';
-    if (question.includes('ERROR_429')) {
-      res.writeHead(429).end();
+    const failure = /ERROR_(400|429|503)/.exec(question);
+    if (failure) {
+      res.writeHead(Number(failure[1]), { 'Content-Type': 'application/json' }).end(
+        JSON.stringify({
+          error: { param: 'stream', message: 'unsupported stream; private-provider-diagnostics' },
+        }),
+      );
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     const chunks = question.includes('SLOW')
       ? ['正在', '逐步', '分析', '网页', '中的', '关键', '证据', '。']
       : [
@@ -58,6 +67,22 @@ const server = createServer(async (req, res) => {
           '- 再检查原始证据\n\n',
           '保留独立思考。',
         ];
+    if (body.stream === false) {
+      const text = chunks.join('');
+      const result =
+        req.url === '/v1/responses'
+          ? {
+              output: [
+                { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+              ],
+            }
+          : req.url === '/v1/messages'
+            ? { content: [{ type: 'text', text }] }
+            : { choices: [{ message: { content: text } }] };
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     let index = 0;
     const timer = setInterval(
       () => {
@@ -154,6 +179,7 @@ try {
     await options.getByLabel('Base URL').fill(`${baseUrl}/v1`);
     await options.getByLabel('API Key', { exact: true }).fill('test-only-not-a-real-secret');
     await options.getByLabel('模型', { exact: true }).fill('reading-test');
+    await expect(options.getByRole('combobox', { name: '推理强度', exact: true })).toHaveValue('');
     await options.getByRole('button', { name: '保存并授权' }).click();
     await expect(options.getByText('使用中', { exact: true })).toBeVisible();
     await capture(options, 'settings-configured.png', true);
@@ -180,6 +206,8 @@ try {
     await expect(panel.getByRole('button', { name: '发送问题' })).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(requests[0].messages[0].content).toContain('Reading principle');
+    expect(requests[0]).not.toHaveProperty('reasoning_effort');
+    expect(requests[0]).not.toHaveProperty('reasoning');
     await capture(panel, 'panel-answer.png');
   });
   await step('content dialog exposes real extraction and closes with Escape', async () => {
@@ -187,6 +215,181 @@ try {
     await expect(panel.getByRole('dialog')).toContainText('Reading principle');
     await panel.keyboard.press('Escape');
     await expect(panel.getByRole('dialog')).toHaveCount(0);
+  });
+  await step(
+    'YouTube captions cross MAIN world, background and worker with timestamp citations',
+    async () => {
+      const videoUrl = 'https://www.youtube.com/watch?v=abcdefghijk';
+      let delayCaption = false;
+      let releaseCaption;
+      await context.route('https://www.youtube.com/**', async (route) => {
+        if (route.request().url().includes('/api/timedtext')) {
+          if (delayCaption)
+            await new Promise((resolve) => {
+              releaseCaption = resolve;
+            });
+          await route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify({
+              events: [
+                { tStartMs: 1000, dDurationMs: 4000, segs: [{ utf8: '视频字幕中的独立证据。' }] },
+                { tStartMs: 65000, dDurationMs: 3000, segs: [{ utf8: '一分钟后的关键结论。' }] },
+              ],
+            }),
+          });
+        } else
+          await route.fulfill({
+            contentType: 'text/html',
+            body: `<html><title>Video fixture</title><body><nav>Do not summarize this navigation</nav><div id="movie_player"></div><script>
+        const player = document.getElementById('movie_player');
+        player.getPlayerResponse = () => ({ videoDetails: { videoId: new URL(location.href).searchParams.get('v'), title: '视频字幕验收' }, captions: { playerCaptionsTracklistRenderer: { captionTracks: new URL(location.href).searchParams.get('v') === 'nocaption12' ? [] : [{ languageCode: 'zh-Hans', kind: 'asr', baseUrl: 'https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=zh-Hans' }] } } });
+        </script></body></html>`,
+          });
+      });
+      const video = await context.newPage();
+      await video.goto(videoUrl);
+      const videoTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        videoUrl,
+      );
+      const videoPanel = await openPanel(videoTabId);
+      try {
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+        const system = requests.at(-1).messages[0].content;
+        expect(system).toContain('视频字幕中的独立证据');
+        expect(system).toContain('[01:05](https://www.youtube.com/watch?v=abcdefghijk&t=65s)');
+        expect(system).toContain('do not claim to have watched visuals');
+        expect(system).not.toContain('Do not summarize this navigation');
+        await videoPanel.getByRole('button', { name: '查看字幕' }).click();
+        await expect(videoPanel.getByRole('dialog')).toContainText('自动字幕，可能有误');
+        await expect(videoPanel.getByRole('link', { name: '01:05' })).toHaveAttribute(
+          'href',
+          videoUrl + '&t=65s',
+        );
+        await videoPanel.keyboard.press('Escape');
+        const before = requests.length;
+        await videoPanel
+          .getByRole('textbox', { name: '向当前视频提问' })
+          .fill('请解释字幕中的结论');
+        await videoPanel.getByRole('button', { name: '发送问题' }).click();
+        await expect.poll(() => requests.length).toBe(before + 1);
+        await expect(videoPanel.locator('.message.assistant').last()).toContainText(
+          '保留独立思考。',
+        );
+        await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+        await videoPanel.reload();
+        await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+        // The old result must not satisfy another extraction after an SPA switch.
+        delayCaption = true;
+        const pending = videoPanel.evaluate(
+          async ({ tabId, url }) =>
+            chrome.runtime.sendMessage({
+              channel: 'glintab:rpc',
+              request: { type: 'page:extract', tabId, expectedPageKey: url },
+            }),
+          { tabId: videoTabId, url: videoUrl },
+        );
+        await expect.poll(() => !!releaseCaption).toBe(true);
+        const duplicate = await videoPanel.evaluate(
+          async ({ tabId, url }) =>
+            chrome.runtime.sendMessage({
+              channel: 'glintab:rpc',
+              request: { type: 'page:extract', tabId, expectedPageKey: url },
+            }),
+          { tabId: videoTabId, url: videoUrl },
+        );
+        expect(duplicate.error).toContain('正在提取内容');
+        await video.evaluate(() => history.pushState({}, '', '?v=nocaption12'));
+        delayCaption = false;
+        releaseCaption();
+        expect((await pending).error).toContain('视频已变化');
+        await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+        const previous = requests.length;
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('alert')).toContainText('没有可读取的字幕');
+        expect(requests.length).toBe(previous);
+        await capture(videoPanel, 'video-no-captions.png');
+      } finally {
+        await videoPanel.close();
+        await video.close();
+      }
+    },
+  );
+  await step('Bilibili current part captions and login errors use page credentials', async () => {
+    const videoUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/?p=2';
+    await context.route('https://www.bilibili.com/**', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<html><title>Bilibili fixture</title><body>Video navigation only</body></html>',
+      }),
+    );
+    let loginRequired = false;
+    await context.route('https://api.bilibili.com/**', async (route) => {
+      const origin = 'https://www.bilibili.com';
+      const headers = {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Credentials': 'true',
+      };
+      const url = new URL(route.request().url());
+      const data = url.pathname.endsWith('/view')
+        ? {
+            bvid: 'BV1xx411c7mD',
+            title: '分 P 字幕验收',
+            pages: [
+              { page: 1, cid: 111, part: '第一部分' },
+              { page: 2, cid: 222, part: '第二部分' },
+            ],
+          }
+        : loginRequired
+          ? { need_login_subtitle: true }
+          : {
+              cid: Number(url.searchParams.get('cid')),
+              subtitle: {
+                subtitles: [
+                  { lan: 'zh-CN', subtitle_url: '//aisubtitle.hdslb.com/bfs/subtitle/test.json' },
+                ],
+              },
+            };
+      await route.fulfill({
+        headers,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 0, data }),
+      });
+    });
+    await context.route('https://aisubtitle.hdslb.com/**', (route) =>
+      route.fulfill({
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        contentType: 'application/json',
+        body: JSON.stringify({ body: [{ from: 12, to: 16, content: '第二分 P 的字幕证据' }] }),
+      }),
+    );
+    const video = await context.newPage();
+    await video.goto(videoUrl);
+    const videoTabId = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+      videoUrl,
+    );
+    const videoPanel = await openPanel(videoTabId);
+    try {
+      await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+      await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+      expect(requests.at(-1).messages[0].content).toContain('?p=2&t=12');
+      await videoPanel.getByRole('button', { name: '查看字幕' }).click();
+      await expect(videoPanel.getByRole('dialog')).toContainText('第二分 P 的字幕证据');
+      await capture(videoPanel, 'video-captions.png');
+      await videoPanel.keyboard.press('Escape');
+      loginRequired = true;
+      await video.goto(videoUrl.replace('p=2', 'p=1'));
+      await expect(videoPanel.getByRole('button', { name: '帮我总结这个视频' })).toBeEnabled();
+      const before = requests.length;
+      await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+      await expect(videoPanel.getByRole('alert')).toContainText('需要登录 B 站');
+      expect(requests.length).toBe(before);
+    } finally {
+      await videoPanel.close();
+      await video.close();
+    }
   });
   await step(
     'ungranted sites offer one-time all-sites access and preserve the question',
@@ -327,10 +530,14 @@ try {
     await article.screenshot({ path: path.join(artifactPath, 'drawer-closed.png') });
   });
   await step('HTTP errors are visible and do not leave generation stuck', async () => {
-    await panel.getByRole('textbox', { name: '向当前网页提问' }).fill('ERROR_429');
-    await panel.getByRole('button', { name: '发送问题' }).click();
-    await expect(panel.getByRole('alert')).toContainText('429');
-    await expect(panel.getByRole('textbox', { name: '向当前网页提问' })).toBeEnabled();
+    for (const status of [429, 400, 503]) {
+      await panel.getByRole('textbox', { name: '向当前网页提问' }).fill(`ERROR_${status}`);
+      await panel.getByRole('button', { name: '发送问题' }).click();
+      await expect(panel.getByRole('alert')).toContainText(String(status));
+      await expect(panel.getByRole('alert')).not.toContainText('private-provider-diagnostics');
+      if (status === 400) await expect(panel.getByRole('alert')).toContainText('参数：stream');
+      await expect(panel.getByRole('textbox', { name: '向当前网页提问' })).toBeEnabled();
+    }
   });
   await step('direct first question makes exactly one request without a summary turn', async () => {
     await article.goto(`${baseUrl}/direct-question`);
@@ -350,6 +557,8 @@ try {
     await options
       .getByRole('textbox', { name: '网页摘要指令' })
       .fill('请用三点总结网页，只依据原文。');
+    const videoPrompt = '请按时间线总结视频字幕，引用关键时间戳。';
+    await options.getByRole('textbox', { name: '视频摘要指令' }).fill(videoPrompt);
     await options.getByRole('button', { name: '保存指令' }).click();
     await expect(options.getByRole('status')).toContainText('设置已保存');
     await article.goto(`${baseUrl}/custom-summary`);
@@ -357,12 +566,105 @@ try {
     await panel.getByRole('button', { name: '帮我总结这篇网页' }).click();
     await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
     expect(requests.at(-1).messages.at(-1).content).toBe('请用三点总结网页，只依据原文。');
+    // Both prompts persist independently; a video task uses the current saved
+    // video instruction while a direct question preserves the typed question.
+    await options.reload();
+    await options.getByRole('button', { name: '摘要指令', exact: true }).click();
+    await expect(options.getByRole('textbox', { name: '网页摘要指令' })).toHaveValue(
+      '请用三点总结网页，只依据原文。',
+    );
+    await expect(options.getByRole('textbox', { name: '视频摘要指令' })).toHaveValue(videoPrompt);
+    await capture(options, 'settings-prompts.png', true);
+    const video = await context.newPage();
+    await video.goto('https://www.youtube.com/watch?v=abcdefghijk&prompt_test=1');
+    const videoTabId = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+      video.url(),
+    );
+    const videoPanel = await openPanel(videoTabId);
+    try {
+      await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+      await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+      expect(requests.at(-1).messages.at(-1).content).toBe(videoPrompt);
+      await videoPanel.getByRole('textbox', { name: '向当前视频提问' }).fill('只解释第二个观点');
+      await videoPanel.getByRole('button', { name: '发送问题' }).click();
+      await expect.poll(() => requests.at(-1).messages.at(-1).content).toBe('只解释第二个观点');
+      await expect(videoPanel.getByRole('button', { name: '查看字幕' })).toBeVisible();
+    } finally {
+      await videoPanel.close();
+      await video.close();
+    }
+    await options.getByRole('button', { name: '恢复默认网页指令' }).click();
+    const defaultWeb = await options.getByRole('textbox', { name: '网页摘要指令' }).inputValue();
+    expect(defaultWeb).not.toBe('请用三点总结网页，只依据原文。');
+    await expect(options.getByRole('textbox', { name: '视频摘要指令' })).toHaveValue(videoPrompt);
+    await options.getByRole('button', { name: '保存指令' }).click();
+    await expect(options.getByRole('status')).toContainText('设置已保存');
+    await options.reload();
+    await options.getByRole('button', { name: '摘要指令', exact: true }).click();
+    await expect(options.getByRole('textbox', { name: '网页摘要指令' })).toHaveValue(defaultWeb);
+    await expect(options.getByRole('textbox', { name: '视频摘要指令' })).toHaveValue(videoPrompt);
+    await options.getByRole('textbox', { name: '视频摘要指令' }).fill('');
+    await expect(options.getByRole('button', { name: '保存指令' })).toBeDisabled();
+    await options.getByRole('button', { name: '恢复默认视频指令' }).click();
+    await expect(options.getByRole('button', { name: '保存指令' })).toBeEnabled();
+    await expect(options.getByRole('textbox', { name: '网页摘要指令' })).toHaveValue(defaultWeb);
+    await options.getByRole('button', { name: '保存指令' }).click();
+    await expect(options.getByRole('status')).toContainText('设置已保存');
     await options.getByRole('button', { name: 'AI 供应商', exact: true }).click();
     await options.getByRole('button', { name: '编辑 本地验收模型' }).click();
     await options.getByRole('button', { name: '获取模型', exact: true }).click();
     await expect(options.locator('#model-list option')).toHaveAttribute('value', 'reading-test');
     await options.getByRole('button', { name: '取消', exact: true }).click();
   });
+  await step(
+    'reasoning effort persists, reaches the Worker, resets, and rejects invalid RPC values',
+    async () => {
+      const select = options.getByRole('combobox', { name: '推理强度', exact: true });
+      await options.getByRole('button', { name: '编辑 本地验收模型' }).click();
+      await select.selectOption('high');
+      await options.getByRole('button', { name: '保存并授权' }).click();
+      await expect(options.getByRole('button', { name: '编辑 本地验收模型' })).toBeVisible();
+      await options.reload();
+      await options.getByRole('button', { name: '编辑 本地验收模型' }).click();
+      await expect(select).toHaveValue('high');
+      await capture(options, 'provider-reasoning.png', true);
+      const invalid = await options.evaluate(async () => {
+        const response = await chrome.runtime.sendMessage({
+          channel: 'glintab:rpc',
+          request: { type: 'config:get' },
+        });
+        const provider = response.data.providers[0];
+        const result = await chrome.runtime.sendMessage({
+          channel: 'glintab:rpc',
+          request: { type: 'provider:save', provider: { ...provider, reasoningEffort: 'invalid' } },
+        });
+        const after = await chrome.runtime.sendMessage({
+          channel: 'glintab:rpc',
+          request: { type: 'config:get' },
+        });
+        return { result, effort: after.data.providers[0].reasoningEffort };
+      });
+      expect(invalid.result.ok).toBe(false);
+      expect(invalid.result.error).toContain('推理强度设置无效');
+      expect(invalid.effort).toBe('high');
+      await options.getByRole('button', { name: '取消', exact: true }).click();
+      await article.goto(`${baseUrl}/reasoning-high`);
+      await panel.getByRole('button', { name: '帮我总结这篇网页' }).click();
+      await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+      expect(requests.at(-1).reasoning_effort).toBe('high');
+      expect(requests.at(-1)).not.toHaveProperty('reasoning');
+      await options.getByRole('button', { name: '编辑 本地验收模型' }).click();
+      await select.selectOption('');
+      await options.getByRole('button', { name: '保存并授权' }).click();
+      await expect(options.getByRole('button', { name: '编辑 本地验收模型' })).toBeVisible();
+      await article.goto(`${baseUrl}/reasoning-default`);
+      await panel.getByRole('button', { name: '帮我总结这篇网页' }).click();
+      await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
+      expect(requests.at(-1)).not.toHaveProperty('reasoning_effort');
+      expect(requests.at(-1)).not.toHaveProperty('reasoning');
+    },
+  );
   for (const [format, label] of [
     ['openai_responses', 'Responses 验收'],
     ['anthropic', 'Anthropic 验收'],
@@ -372,11 +674,29 @@ try {
       async () => {
         await options.getByRole('button', { name: '添加供应商', exact: true }).first().click();
         await options.getByLabel('供应商名称').fill(label);
+        await options
+          .getByRole('combobox', { name: '推理强度', exact: true })
+          .selectOption('xhigh');
         await options.getByLabel('API 协议').selectOption(format);
+        if (format === 'anthropic')
+          await expect(
+            options.getByRole('combobox', { name: '推理强度', exact: true }),
+          ).toHaveCount(0);
+        if (format === 'openai_responses')
+          await options.getByRole('checkbox', { name: '流式输出' }).uncheck();
         await options.getByLabel('Base URL').fill(`${baseUrl}/v1`);
         await options.getByLabel('API Key', { exact: true }).fill('test-only');
         await options.getByLabel('模型', { exact: true }).fill('reading-test');
         await options.getByRole('button', { name: '保存并授权' }).click();
+        if (format === 'openai_responses') {
+          await options.getByRole('button', { name: `编辑 ${label}` }).click();
+          await expect(options.getByRole('checkbox', { name: '流式输出' })).not.toBeChecked();
+          await expect(
+            options.getByRole('combobox', { name: '推理强度', exact: true }),
+          ).toHaveValue('xhigh');
+          await capture(options, 'provider-nonstream.png', true);
+          await options.getByRole('button', { name: '取消', exact: true }).click();
+        }
         const row = options
           .locator('.provider-row')
           .filter({ has: options.getByText(label, { exact: true }) });
@@ -388,6 +708,11 @@ try {
         await panel.getByRole('button', { name: '帮我总结这篇网页' }).click();
         await expect(panel.getByRole('button', { name: '重新摘要' })).toBeVisible();
         await expect(panel.locator('.message.assistant')).toContainText('保留独立思考。');
+        expect(requests.at(-1).stream).toBe(format !== 'openai_responses');
+        expect(requests.at(-1)).not.toHaveProperty('reasoning_effort');
+        if (format === 'openai_responses')
+          expect(requests.at(-1).reasoning).toEqual({ effort: 'xhigh' });
+        else expect(requests.at(-1)).not.toHaveProperty('reasoning');
       },
     );
   }
@@ -469,7 +794,8 @@ try {
         passed,
         requests: requests.length,
         failures,
-        testPermissionOverride: 'loopback host permission in disposable copy only',
+        testPermissionOverride:
+          'loopback and mocked video origin permissions in disposable copy only',
       },
       null,
       2,

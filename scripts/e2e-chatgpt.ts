@@ -149,6 +149,7 @@ try {
   await options.getByRole('button', { name: '添加供应商', exact: true }).first().click();
   await options.getByRole('button', { name: 'ChatGPT 账号登录', exact: true }).click();
   await expect(options.getByRole('textbox', { name: 'API Key', exact: true })).toHaveCount(0);
+  await options.getByRole('combobox', { name: '推理强度', exact: true }).selectOption('high');
   await expect(options.locator('body')).not.toContainText('npm run auth:bridge');
   const authorization = context.waitForEvent('page');
   await options.getByRole('button', { name: '使用 ChatGPT 登录', exact: true }).click();
@@ -166,9 +167,13 @@ try {
   );
   expect(fixture.controls.exchanges).toBe(1); // Catalog failure must not repeat login.
   expect(catalogVersions).toHaveLength(2);
+  await expect(options.getByRole('combobox', { name: '推理强度', exact: true })).toHaveValue(
+    'high',
+  );
   await options.getByRole('button', { name: '保存连接', exact: true }).click();
   await expect(options.getByText('使用中', { exact: true })).toBeVisible();
   const saved = await worker.evaluate(() => chrome.storage.local.get('config'));
+  expect((saved.config as any).providers[0].reasoningEffort).toBe('high');
   expect(JSON.stringify(saved)).not.toContain(fixture.accessToken);
   expect(JSON.stringify(saved)).not.toContain(fixture.refreshToken);
   expect(JSON.stringify(saved)).not.toContain('idToken');
@@ -198,6 +203,9 @@ try {
   expect(inference[1]!.authorization).toBe(`Bearer ${fixture.accessToken}-1`);
   expect(inference[1]!.account).toBe('synthetic-account');
   expect(inference[1]!.body).toMatchObject({ store: false, stream: true });
+  expect(inference[0]!.body.reasoning).toEqual({ effort: 'high' });
+  expect(inference[1]!.body.reasoning).toEqual({ effort: 'high' });
+  expect(inference[1]!.body.reasoning_effort).toBeUndefined();
   expect(inference[1]!.body.max_output_tokens).toBeUndefined();
   expect(inference[1]!.body.instructions).toContain('Read carefully');
   await options.screenshot({
@@ -220,6 +228,7 @@ try {
           'PKCE and signed identity validation',
           'catalog client_version and retry after 400 without reauthentication',
           'models and configuration save',
+          'configured reasoning effort survives login and 401 retry',
           'tokens excluded from config/UI responses',
           'direct Codex Responses via Worker',
           '401 refresh and single retry',

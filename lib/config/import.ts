@@ -1,7 +1,11 @@
 import { parse } from 'smol-toml';
 import type { Provider, ApiFormat } from '../../types';
+import { validateReasoningEffort } from '../domain/reasoning';
 type Imported = Partial<
-  Pick<Provider, 'name' | 'baseUrl' | 'apiKey' | 'model' | 'apiFormat' | 'contextLimit'>
+  Pick<
+    Provider,
+    'name' | 'baseUrl' | 'apiKey' | 'model' | 'apiFormat' | 'contextLimit' | 'reasoningEffort'
+  >
 >;
 export function importConfig(raw: string): Imported {
   let data: any;
@@ -36,6 +40,7 @@ export function importConfig(raw: string): Imported {
       apiKey: provider.experimental_bearer_token || provider.api_key,
       apiFormat: provider.wire_api === 'responses' ? 'openai_responses' : 'openai_chat',
       contextLimit: data.model_context_window,
+      reasoningEffort: data.model_reasoning_effort,
     };
   } else if (data.provider && typeof data.provider === 'object') {
     const [name, ...model] = String(data.model || '').split('/');
@@ -64,9 +69,11 @@ export function importConfig(raw: string): Imported {
       model: data.model,
       apiFormat: format,
       contextLimit: data.contextLimit,
+      reasoningEffort: data.reasoningEffort ?? data.reasoning_effort ?? data.reasoning?.effort,
     };
   }
   const clean: Imported = {};
+  validateReasoningEffort(result.reasoningEffort);
   for (const [key, value] of Object.entries(result)) {
     if (value === undefined || value === '') continue;
     if (key === 'contextLimit') {

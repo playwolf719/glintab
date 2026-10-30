@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Copy, Download } from 'lucide-react';
 import type { PageSource } from '../../types';
 import { Modal } from '../ui/primitives';
+import { timestamp, videoTimestampUrl } from '../../lib/domain/video';
 export function ContentDialog({ source, onClose }: { source: PageSource; onClose(): void }) {
   const [feedback, setFeedback] = useState('');
   async function copy() {
@@ -25,16 +26,37 @@ export function ContentDialog({ source, onClose }: { source: PageSource; onClose
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return (
-    <Modal title="提取的网页内容" onClose={onClose} wide>
+    <Modal title={source.video ? '提取的视频字幕' : '提取的网页内容'} onClose={onClose} wide>
       <div className="content-meta">
         <strong>{source.title}</strong>
         <span>
           {source.content.length.toLocaleString()} 字符{source.truncated ? ' · 已截断' : ''}
-          {source.fallback ? ' · 整页提取' : ' · 正文提取'}
+          {source.video
+            ? ` · ${source.video.language} · ${source.video.automatic ? '自动字幕，可能有误' : '字幕'}${source.video.part ? ` · P${source.video.part}` : ''}`
+            : source.fallback
+              ? ' · 整页提取'
+              : ' · 正文提取'}
         </span>
         <span>{new Date(source.extractedAt).toLocaleString()}</span>
       </div>
-      <pre className="source-text">{source.content}</pre>
+      {source.video ? (
+        <div className="source-text">
+          {source.video.segments.map((segment, index) => (
+            <p key={index}>
+              <a
+                href={videoTimestampUrl(source.url, segment.start)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {timestamp(segment.start)}
+              </a>{' '}
+              {segment.text}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <pre className="source-text">{source.content}</pre>
+      )}
       <footer>
         <span className="feedback" role="status">
           {feedback}

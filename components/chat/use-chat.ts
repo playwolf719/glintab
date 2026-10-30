@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Conversation, EngineEvent, PageSource, Settings, TaskSnapshot } from '../../types';
+import type { Conversation, EngineEvent, PageSource, TaskSnapshot } from '../../types';
 import { pageKey } from '../../lib/domain/page';
 import { isCurrentSnapshot } from '../../lib/domain/task-events';
 import { rpc, errorText } from '../../lib/platform/rpc';
 import { grantPageAccess } from '../../lib/platform/permissions';
 
-export function useChat(settings: Settings) {
+export function useChat() {
   const params = new URLSearchParams(location.search);
   const fixedTab = params.has('tabId') ? Number(params.get('tabId')) : null;
   const [tab, setTab] = useState<chrome.tabs.Tab | null>(null);
@@ -175,7 +175,7 @@ export function useChat(settings: Settings) {
         type: 'task:start',
         tabId: sourceTab.id,
         conversation: next,
-        question: summary ? settings.webPrompt : question,
+        question,
         summary,
         streamId,
         editMessageId,

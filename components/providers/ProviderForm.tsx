@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Check, Download, Eye, EyeOff, LoaderCircle, Save } from 'lucide-react';
 import type { ApiFormat, Provider } from '../../types';
-import { PRESETS } from '../../config/defaults';
+import { DEFAULT_CONTEXT_LIMIT, PRESETS } from '../../config/defaults';
 import { importConfig } from '../../lib/config/import';
+import { REASONING_EFFORT_OPTIONS } from '../../lib/domain/reasoning';
 import { grantProvider } from '../../lib/platform/permissions';
 import { errorText, rpc } from '../../lib/platform/rpc';
 import { ErrorBanner, IconButton } from '../ui/primitives';
@@ -17,7 +18,7 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
       apiKey: '',
       model: '',
       apiFormat: 'openai_chat',
-      contextLimit: 32768,
+      contextLimit: DEFAULT_CONTEXT_LIMIT,
       createdAt: Date.now(),
     },
   );
@@ -89,7 +90,11 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
   const [imported, setImported] = useState(false);
   const [importApplied, setImportApplied] = useState('');
   const patch = (changes: Partial<Provider>) =>
-    setValue((previous) => ({ ...previous, ...changes }));
+    setValue((previous) => ({
+      ...previous,
+      ...changes,
+      ...(changes.apiFormat === 'anthropic' ? { reasoningEffort: undefined } : {}),
+    }));
   function applyImport() {
     try {
       patch(importConfig(raw));
@@ -137,7 +142,7 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
   }
   async function connected(connection: Provider) {
     if (!provider) uncommitted.current = connection;
-    setValue(connection);
+    setValue((previous) => ({ ...connection, reasoningEffort: previous.reasoningEffort }));
     setError('');
     setBusy(true);
     try {
@@ -242,6 +247,22 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
                   : '填写 API 根地址（通常包含 /v1），无需填写具体接口路径。'}
               </small>
             </label>
+            <div className="settings-section">
+              <div>
+                <h2>流式输出</h2>
+                <p>开启后逐步显示回答。模型不支持流式时关闭，等待完整回答。</p>
+              </div>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  aria-label="流式输出"
+                  checked={value.stream !== false}
+                  onChange={(e) => patch({ stream: e.target.checked })}
+                  disabled={busy}
+                />
+                <span />
+              </label>
+            </div>
             <label className="field">
               API Key
               <div className="password-field">
@@ -293,6 +314,29 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
           </datalist>
           <small>获取失败时，可以直接手动填写。</small>
         </label>
+        {(authMode === 'chatgpt' || value.apiFormat !== 'anthropic') && (
+          <label className="field">
+            推理强度（Reasoning effort）
+            <select
+              aria-label="推理强度"
+              value={value.reasoningEffort || ''}
+              onChange={(e) =>
+                patch({
+                  reasoningEffort: (e.target.value || undefined) as Provider['reasoningEffort'],
+                })
+              }
+              disabled={busy}
+            >
+              <option value="">跟随服务端（默认）</option>
+              {REASONING_EFFORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <small>仅选择模型支持的档位。更高强度可能增加等待时间和用量。</small>
+          </label>
+        )}
         <label className="field">
           上下文上限（tokens）
           <input

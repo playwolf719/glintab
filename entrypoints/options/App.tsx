@@ -16,7 +16,8 @@ import {
 import { Brand, ErrorBanner, IconButton } from '../../components/ui/primitives';
 import { ProviderForm } from '../../components/providers/ProviderForm';
 import { useConfig } from '../../lib/ui/use-config';
-import { WEB_PROMPT } from '../../config/defaults';
+import { VIDEO_PROMPT, WEB_PROMPT } from '../../config/defaults';
+import { SUMMARY_PROMPT_LIMIT } from '../../lib/domain/settings';
 import type { Provider, Settings } from '../../types';
 import { errorText, rpc } from '../../lib/platform/rpc';
 import { grantProvider } from '../../lib/platform/permissions';
@@ -268,12 +269,13 @@ export default function App() {
             <>
               <div className="page-heading">
                 <h1>摘要指令</h1>
-                <p>让每次摘要，都更贴近你的阅读习惯。</p>
+                <p>分别自定义网页和视频总结的提示词，让摘要更贴近你的阅读习惯。</p>
               </div>
               <div className="section-title">
                 <h2>网页摘要</h2>
                 <button
                   className="text-link"
+                  aria-label="恢复默认网页指令"
                   onClick={() => setSettings({ ...settings, webPrompt: WEB_PROMPT })}
                 >
                   <RotateCcw size={13} />
@@ -283,17 +285,40 @@ export default function App() {
               <label className="field">
                 <span className="sr-only">网页摘要指令</span>
                 <textarea
-                  rows={10}
+                  rows={8}
                   value={settings.webPrompt}
                   onChange={(e) => setSettings({ ...settings, webPrompt: e.target.value })}
-                  maxLength={12000}
+                  maxLength={SUMMARY_PROMPT_LIMIT}
                 />
                 <small>这段指令用于「帮我总结这篇网页」。直接提问时使用你输入的问题。</small>
+              </label>
+              <div className="section-title">
+                <h2>视频摘要</h2>
+                <button
+                  className="text-link"
+                  aria-label="恢复默认视频指令"
+                  onClick={() => setSettings({ ...settings, videoPrompt: VIDEO_PROMPT })}
+                >
+                  <RotateCcw size={13} />
+                  恢复默认
+                </button>
+              </div>
+              <label className="field">
+                <span className="sr-only">视频摘要指令</span>
+                <textarea
+                  rows={8}
+                  value={settings.videoPrompt}
+                  onChange={(e) => setSettings({ ...settings, videoPrompt: e.target.value })}
+                  maxLength={SUMMARY_PROMPT_LIMIT}
+                />
+                <small>
+                  这段指令用于 YouTube 和 B 站的「帮我总结这个视频」。直接提问时使用你输入的问题。
+                </small>
               </label>
               <div className="form-footer">
                 <button
                   className="button primary"
-                  disabled={saving || !settings.webPrompt.trim()}
+                  disabled={saving || !settings.webPrompt.trim() || !settings.videoPrompt.trim()}
                   onClick={() => void saveSettings()}
                 >
                   保存指令
@@ -310,7 +335,7 @@ export default function App() {
               <div className="settings-section">
                 <div>
                   <h2>回答语言</h2>
-                  <p>应用于网页摘要和后续提问。</p>
+                  <p>应用于网页、视频摘要和后续提问。</p>
                 </div>
                 <select
                   aria-label="回答语言"

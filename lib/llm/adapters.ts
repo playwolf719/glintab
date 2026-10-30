@@ -1,4 +1,17 @@
-import type { ApiFormat } from '../../types';
+import type { ApiFormat, Provider, ReasoningEffort } from '../../types';
+import { validateReasoningEffort } from '../domain/reasoning';
+
+export function reasoningParameters(provider: Provider): {
+  reasoning_effort?: ReasoningEffort;
+  reasoning?: { effort: ReasoningEffort };
+} {
+  validateReasoningEffort(provider.reasoningEffort);
+  if (provider.reasoningEffort === undefined) return {};
+  if (provider.authType === 'chatgpt' || provider.apiFormat === 'openai_responses')
+    return { reasoning: { effort: provider.reasoningEffort } };
+  if (provider.apiFormat === 'openai_chat') return { reasoning_effort: provider.reasoningEffort };
+  return {};
+}
 export interface WireMessage {
   role: 'user' | 'assistant';
   content: string;

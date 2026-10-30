@@ -22,11 +22,12 @@ import { Message } from '../../components/chat/Message';
 import { ContentDialog } from '../../components/chat/ContentDialog';
 import { errorText, rpc } from '../../lib/platform/rpc';
 import { isReadableUrl, pageKey } from '../../lib/domain/page';
+import { videoTarget } from '../../lib/domain/video';
 import { PAGE_ACCESS_DECLINED, PAGE_ACCESS_REQUIRED } from '../../lib/platform/permissions';
 
 export default function App() {
   const { config, loaded, error: configError } = useConfig();
-  const chat = useChat(config.settings);
+  const chat = useChat();
   const [question, setQuestion] = useState('');
   const [editId, setEditId] = useState<string>();
   const [viewContent, setViewContent] = useState(false);
@@ -39,6 +40,7 @@ export default function App() {
   const hasMessages = messages.some((m) => !m.hidden);
   const lastUser = messages.findLast((m) => m.role === 'user' && !m.hidden)?.id;
   const source = chat.conversation?.source;
+  const isVideo = !!videoTarget(chat.tab?.url || '');
   const readable = isReadableUrl(chat.tab?.url);
   useEffect(() => {
     if (stickToBottom.current && scroll.current)
@@ -200,7 +202,8 @@ export default function App() {
             <h1>每一页，都读得更深。</h1>
             <p>
               提炼重点，连接思路。
-              <br />让 AI 和你一起理解当前网页。
+              <br />
+              {isVideo ? '提取视频字幕，按时间线理解内容。' : '让 AI 和你一起理解当前网页。'}
             </p>
             {!loaded || chat.phase === 'loading' ? (
               <div className="muted">正在加载…</div>
@@ -232,8 +235,10 @@ export default function App() {
                     <Sparkles size={20} />
                   </span>
                   <span>
-                    <strong>帮我总结这篇网页</strong>
-                    <small>抓住核心观点与关键事实</small>
+                    <strong>{isVideo ? '帮我总结这个视频' : '帮我总结这篇网页'}</strong>
+                    <small>
+                      {isVideo ? '依据字幕提炼重点，附上时间戳' : '抓住核心观点与关键事实'}
+                    </small>
                   </span>
                   <ArrowUp size={17} className="diagonal-arrow" />
                 </button>
@@ -241,7 +246,11 @@ export default function App() {
                   className="subtle-action"
                   disabled={chat.busy}
                   onClick={() => {
-                    setQuestion('这篇文章的核心论点是什么？有哪些证据支持？');
+                    setQuestion(
+                      isVideo
+                        ? '这个视频的核心观点是什么？请引用字幕时间戳。'
+                        : '这篇文章的核心论点是什么？有哪些证据支持？',
+                    );
                     input.current?.focus();
                   }}
                 >
@@ -251,7 +260,11 @@ export default function App() {
                   className="subtle-action"
                   disabled={chat.busy}
                   onClick={() => {
-                    setQuestion('请用容易理解的语言解释这篇文章，并说明有哪些局限。');
+                    setQuestion(
+                      isVideo
+                        ? '请依据字幕解释这个视频，并说明有哪些局限，引用相关时间戳。'
+                        : '请用容易理解的语言解释这篇文章，并说明有哪些局限。',
+                    );
                     input.current?.focus();
                   }}
                 >
@@ -295,7 +308,7 @@ export default function App() {
             {source && config.settings.showContent && (
               <button className="text-link" onClick={() => setViewContent(true)}>
                 <FileText size={12} />
-                查看正文
+                {source.video ? '查看字幕' : '查看正文'}
               </button>
             )}
           </div>
@@ -304,7 +317,9 @@ export default function App() {
           <div className="generation-status" role="status">
             <span className="status-dot" />
             {chat.phase === 'extracting'
-              ? '正在提取网页正文…'
+              ? isVideo
+                ? '正在提取视频字幕…'
+                : '正在提取网页正文…'
               : chat.phase === 'starting'
                 ? '正在启动模型…'
                 : '正在生成回答，关闭面板后仍会继续'}
@@ -326,9 +341,13 @@ export default function App() {
         <div className="composer">
           <textarea
             ref={input}
-            aria-label="向当前网页提问"
+            aria-label={isVideo ? '向当前视频提问' : '向当前网页提问'}
             placeholder={
-              currentProvider ? '针对这篇网页，问点什么…' : '先添加 AI 供应商，再开始对话'
+              currentProvider
+                ? isVideo
+                  ? '针对这个视频，问点什么…'
+                  : '针对这篇网页，问点什么…'
+                : '先添加 AI 供应商，再开始对话'
             }
             value={question}
             maxLength={20000}

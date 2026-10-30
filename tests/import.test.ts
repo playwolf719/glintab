@@ -44,3 +44,30 @@ it('rejects invalid imports and unsafe or ambiguous endpoints', () => {
   expect(() => providerOrigin('https://a.test/?key=secret')).toThrow();
   expect(providerOrigin('http://localhost:11434/v1')).toBe('http://localhost:11434/*');
 });
+
+it('imports reasoning effort from Codex and generic configuration without retaining other options', () => {
+  expect(
+    importConfig(
+      'model = "reader"\nmodel_reasoning_effort = "xhigh"\n[model_providers.custom]\nwire_api = "responses"',
+    ),
+  ).toMatchObject({ model: 'reader', reasoningEffort: 'xhigh' });
+  for (const [option, expected] of [
+    [{ reasoningEffort: 'none' }, 'none'],
+    [{ reasoning_effort: 'high' }, 'high'],
+    [{ reasoning: { effort: 'max', summary: 'secret' } }, 'max'],
+  ] as const) {
+    const result = importConfig(JSON.stringify({ model: 'reader', ...option }));
+    expect(Object.keys(result).sort()).toEqual(['model', 'reasoningEffort']);
+    expect(result.reasoningEffort).toBe(expected);
+  }
+  expect(importConfig('{"model":"reader"}')).not.toHaveProperty('reasoningEffort');
+});
+
+it.each(['unknown', '', 10, {}, true])(
+  'rejects invalid imported reasoning effort %j without reflecting its value',
+  (effort) => {
+    expect(() =>
+      importConfig(JSON.stringify({ model: 'reader', reasoningEffort: effort })),
+    ).toThrow('推理强度设置无效');
+  },
+);

@@ -1,10 +1,12 @@
 import { DEFAULT_CONFIG } from '../../config/defaults';
+import { validateSettings } from '../domain/settings';
 import type {
   AppConfig,
   Conversation,
   ChatGPTAuthRecord,
   ChatGPTAuthFlow,
   Provider,
+  Settings,
 } from '../../types';
 export interface StorageDriver {
   get(keys?: string | string[] | null): Promise<Record<string, unknown>>;
@@ -21,21 +23,40 @@ export class Repository {
     this.queue = result.catch(() => {});
     return result;
   }
-  async config(): Promise<AppConfig> {
+  config(): Promise<AppConfig> {
+    return this.write(() => this.loadConfig());
+  }
+  private async loadConfig(): Promise<AppConfig> {
     const { config } = await this.driver.get('config');
-    const saved = config as AppConfig | undefined;
-    return {
+    const saved = config as
+      | (Omit<Partial<AppConfig>, 'schemaVersion' | 'settings'> & {
+          schemaVersion: number;
+          settings?: Partial<Settings>;
+        })
+      | undefined;
+    if (saved && saved.schemaVersion !== 1 && saved.schemaVersion !== 2)
+      throw new Error('此配置版本无法读取，请使用兼容版本的扩展。');
+    const next: AppConfig = {
       ...structuredClone(DEFAULT_CONFIG),
       ...saved,
+      schemaVersion: 2,
       settings: { ...DEFAULT_CONFIG.settings, ...saved?.settings },
     };
+    // Read migrations run under the same queue as mutations. Preserve the user's
+    // webpage prompt and add the independent default video prompt exactly once.
+    if (saved?.schemaVersion === 1) await this.driver.set({ config: next });
+    return next;
   }
   updateConfig(transform: (config: AppConfig) => AppConfig) {
     return this.write(async () => {
-      const config = transform(await this.config());
+      const config = transform(await this.loadConfig());
       await this.driver.set({ config });
       return config;
     });
+  }
+  async saveSettings(settings: Settings) {
+    const validated = validateSettings(settings);
+    return this.updateConfig((config) => ({ ...config, settings: validated }));
   }
   async conversation(key: string): Promise<Conversation | null> {
     const result = await this.driver.get(PREFIX + key);
@@ -61,7 +82,7 @@ export class Repository {
         apiKey: '',
         chatgpt: { connectionId: record.id, email: record.email },
       };
-      const config = await this.config();
+      const config = await this.loadConfig();
       const next = {
         ...config,
         providers: [...config.providers.filter((item) => item.id !== saved.id), saved].sort(
@@ -75,7 +96,7 @@ export class Repository {
   }
   removeDraftAuthRecord(id: string) {
     return this.write(async () => {
-      const used = (await this.config()).providers.some(
+      const used = (await this.loadConfig()).providers.some(
         (provider) => provider.chatgpt?.connectionId === id,
       );
       if (!used) await this.driver.remove('chatgpt-auth:' + id);

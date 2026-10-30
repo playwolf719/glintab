@@ -1,5 +1,5 @@
 import type { Provider, ChatGPTCredentials } from '../../types';
-import { adapters, apiBase, type WireMessage } from './adapters';
+import { adapters, apiBase, reasoningParameters, type WireMessage } from './adapters';
 import { parseSSE } from './sse';
 import { CHATGPT_PROVIDER_URL, CHATGPT_CATALOG_VERSION } from '../../config/chatgpt';
 
@@ -60,12 +60,81 @@ async function chatGPTFetch(
 
 export function httpError(status: number): Error {
   const errors: Record<number, string> = {
+    400: '模型服务拒绝请求参数（HTTP 400），请检查 API 协议、模型与流式输出设置。',
     401: '模型鉴权失败（401），请检查 API Key。',
     403: '模型访问被拒绝（403），请检查密钥及访问权限。',
     404: '未找到模型端点（404），请检查 Base URL、协议和模型名称。',
     429: '模型请求受限（429），请检查配额或稍后重试。',
+    503: '模型服务暂时不可用（HTTP 503），可能是供应商或上游通道异常。请核对模型及 API 协议，稍后重试。',
   };
   return new Error(errors[status] || `模型服务返回 HTTP ${status}，请稍后重试。`);
+}
+async function responseError(response: Response): Promise<Error> {
+  const fallback = httpError(response.status);
+  const reader = response.body?.getReader();
+  if (!reader) return fallback;
+  // Do not reflect arbitrary provider messages: they can echo API keys or input.
+  // Read a bounded error body only to classify known request parameter names.
+  const timer = setTimeout(() => {
+    void reader.cancel().catch(() => {});
+  }, 1500);
+  try {
+    if (response.status !== 400) return fallback;
+    let text = '',
+      size = 0;
+    const decoder = new TextDecoder();
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > 16000) return fallback;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    const json = JSON.parse(text + decoder.decode());
+    const error = json?.error;
+    if (!error || typeof error !== 'object') return fallback;
+    const names = [
+      'stream',
+      'model',
+      'input',
+      'messages',
+      'instructions',
+      'max_output_tokens',
+      'max_tokens',
+      'max_completion_tokens',
+      'store',
+      'reasoning',
+      'reasoning_effort',
+      'temperature',
+    ];
+    let parameter = typeof error.param === 'string' ? error.param.split(/[.\[]/, 1)[0] : undefined;
+    if (!parameter || !names.includes(parameter)) {
+      // Some compatible services supply only a message. Emit our own label,
+      // never the matched message or any unknown parameter supplied by a server.
+      parameter =
+        typeof error.message === 'string'
+          ? names.find((name) =>
+              new RegExp(
+                `(?:unsupported|invalid|不支持|无效)\\s*(?:parameter|param|value|参数)?\\s*[:：]?\\s*['\"]?${name}\\b|\\b${name}\\b['\"]?\\s*(?:is\\s+)?(?:not\\s+supported|unsupported|invalid|must\\s+be|不支持|无效)`,
+                'i',
+              ).test(error.message),
+            )
+          : undefined;
+    }
+    if (!parameter || !names.includes(parameter)) return fallback;
+    return new Error(
+      `模型服务拒绝请求（HTTP 400），涉及参数：${parameter}。${
+        parameter === 'stream'
+          ? '请核对该模型或端点要求的流式输出设置。'
+          : '请核对所选 API 协议与模型要求；可将此参数名反馈以继续排查。'
+      }`,
+    );
+  } catch {
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+    await reader.cancel().catch(() => {});
+  }
 }
 export async function streamCompletion(
   provider: Provider,
@@ -78,6 +147,7 @@ export async function streamCompletion(
   credentials?: CredentialSource,
 ): Promise<void> {
   const adapter = adapters[provider.apiFormat];
+  const reasoning = reasoningParameters(provider);
   let response: Response;
   try {
     const body =
@@ -87,6 +157,7 @@ export async function streamCompletion(
             instructions: system,
             store: false,
             stream: true,
+            ...reasoning,
             input: messages.map((message) => ({
               type: 'message',
               role: message.role,
@@ -98,7 +169,11 @@ export async function streamCompletion(
               ],
             })),
           }
-        : adapter.body(provider.model, system, messages, maxTokens);
+        : {
+            ...adapter.body(provider.model, system, messages, maxTokens),
+            stream: provider.stream !== false,
+            ...reasoning,
+          };
     const init: RequestInit = {
       method: 'POST',
       signal,
@@ -123,7 +198,7 @@ export async function streamCompletion(
   if (!response.ok) {
     if (provider.authType === 'chatgpt' && (response.status === 401 || response.status === 403))
       throw new Error('ChatGPT 授权或模型权限不可用，请在设置中重新登录。');
-    throw httpError(response.status);
+    throw await responseError(response);
   }
   if (response.headers.get('content-type')?.includes('application/json')) {
     const json = await response.json();
@@ -200,7 +275,7 @@ export async function listModels(
       throw new Error(
         `ChatGPT 模型列表请求失败（HTTP ${response.status}）。可重试或手动填写模型 ID。`,
       );
-    throw httpError(response.status);
+    throw await responseError(response);
   }
   const json = await response.json();
   const entries = json.models || json.data || [];

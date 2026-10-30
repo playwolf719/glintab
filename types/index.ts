@@ -1,4 +1,5 @@
 export type ApiFormat = 'openai_chat' | 'anthropic' | 'openai_responses';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface Provider {
   authType?: 'api_key' | 'chatgpt';
   chatgpt?: { connectionId: string; email: string; draftKey?: string };
@@ -8,16 +9,19 @@ export interface Provider {
   apiKey: string;
   model: string;
   apiFormat: ApiFormat;
+  stream?: boolean;
+  reasoningEffort?: ReasoningEffort;
   contextLimit: number;
   createdAt: number;
 }
 export interface Settings {
   summaryLanguage: 'zh' | 'en' | 'auto';
   webPrompt: string;
+  videoPrompt: string;
   showContent: boolean;
 }
 export interface AppConfig {
-  schemaVersion: 1;
+  schemaVersion: 2;
   providers: Provider[];
   currentProviderId: string | null;
   settings: Settings;
@@ -31,6 +35,32 @@ export interface PageSource {
   truncated: boolean;
   extractedAt: number;
   fallback: boolean;
+  video?: VideoSource;
+}
+export type VideoPlatform = 'youtube' | 'bilibili';
+export interface SubtitleSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+export interface VideoSource {
+  platform: VideoPlatform;
+  videoId: string;
+  part?: number;
+  language: string;
+  automatic: boolean;
+  segments: SubtitleSegment[];
+}
+// MAIN-world output is untrusted and is validated again in the background.
+export interface VideoPageResult {
+  url: string;
+  videoId: string;
+  title: string;
+  part?: number;
+  language: string;
+  automatic: boolean;
+  format: 'youtube-json3' | 'segments';
+  body: string;
 }
 export interface ChatMessage {
   id: string;

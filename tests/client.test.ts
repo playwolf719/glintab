@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { streamCompletion } from '../lib/llm/client';
 import { provider } from './fixtures';
-import type { ApiFormat } from '../types';
+import type { ApiFormat, ReasoningEffort } from '../types';
 const signal = new AbortController().signal;
 function sse(events: unknown[]) {
   return new Response(
@@ -85,6 +85,8 @@ describe('model protocols', () => {
     const body = JSON.parse(init.body as string);
     expect(body.stream).toBe(true);
     expect(body.model).toBe('test-model');
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body).not.toHaveProperty('reasoning');
     if (format === 'openai_responses') {
       expect(body.instructions).toBe('system');
       expect(body.max_output_tokens).toBe(2048);
@@ -101,7 +103,7 @@ describe('model protocols', () => {
     await streamCompletion(provider, '', [], 100, signal, onDelta, fetcher);
     expect(onDelta).toHaveBeenCalledWith('complete');
   });
-  it.each([401, 403, 404, 429, 500])(
+  it.each([400, 401, 403, 404, 429, 500, 503])(
     'maps HTTP %s without echoing secret-bearing bodies',
     async (status) => {
       const fetcher = vi
@@ -110,6 +112,111 @@ describe('model protocols', () => {
       await expect(
         streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher),
       ).rejects.toThrow(String(status));
+    },
+  );
+  it('classifies a 400 parameter without reflecting credentials or source text', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json(
+        {
+          error: {
+            param: 'input[0].content',
+            message: 'invalid input contains private-source and sk-private',
+          },
+        },
+        { status: 400 },
+      ),
+    );
+    const error = await streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher).catch(
+      (error: Error) => error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('参数：input');
+    expect((error as Error).message).not.toContain('private');
+  });
+  it('recognizes stream errors from a compatible service and discards unknown diagnostics', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { message: 'Streaming is not supported. stream must be false. secret-key' } },
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { param: 'secret-param', message: 'private diagnostics' } },
+          { status: 400 },
+        ),
+      );
+    const first = await streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher).catch(
+      (error: Error) => error,
+    );
+    expect((first as Error).message).toContain('参数：stream');
+    expect((first as Error).message).not.toContain('secret-key');
+    const second = await streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher).catch(
+      (error: Error) => error,
+    );
+    expect((second as Error).message).toContain('HTTP 400');
+    expect((second as Error).message).not.toMatch(/secret-param|private diagnostics/);
+  });
+  it('bounds error body reads and cancels oversized diagnostic responses', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('private'.repeat(3000)));
+      },
+      cancel,
+    });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 400 }));
+    const error = await streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher).catch(
+      (error: Error) => error,
+    );
+    expect((error as Error).message).toContain('HTTP 400');
+    expect((error as Error).message).not.toContain('private');
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('does not hang while an error response body stays open', async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 400 }),
+        );
+      const result = streamCompletion(provider, '', [], 100, signal, vi.fn(), fetcher).catch(
+        (error: Error) => error,
+      );
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(((await result) as Error).message).toContain('HTTP 400');
+      expect(cancel).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each([
+    { format: 'openai_chat', json: { choices: [{ message: { content: '完整回答' } }] } },
+    {
+      format: 'openai_responses',
+      json: { output: [{ content: [{ type: 'output_text', text: '完整回答' }] }] },
+    },
+    { format: 'anthropic', json: { content: [{ type: 'text', text: '完整回答' }] } },
+  ] as const)(
+    'requests non-streaming $format and emits the complete answer once',
+    async ({ format, json }) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(json));
+      const onDelta = vi.fn();
+      await streamCompletion(
+        { ...provider, apiFormat: format, stream: false },
+        'system',
+        [{ role: 'user', content: 'question' }],
+        2048,
+        signal,
+        onDelta,
+        fetcher,
+      );
+      expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).stream).toBe(false);
+      expect(onDelta.mock.calls).toEqual([['完整回答']]);
     },
   );
   it('rejects empty output and truncated streams', async () => {
@@ -150,6 +257,115 @@ describe('model protocols', () => {
   });
 });
 
+describe('reasoning effort', () => {
+  const efforts: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  it.each(efforts)(
+    'sends %s using the selected protocol in streaming and JSON modes',
+    async (effort) => {
+      for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+        for (const stream of [true, false]) {
+          const response = stream
+            ? sse(
+                apiFormat === 'openai_chat'
+                  ? [{ choices: [{ delta: { content: 'ok' } }] }, '[DONE]']
+                  : [
+                      { type: 'response.output_text.delta', delta: 'ok' },
+                      { type: 'response.completed' },
+                    ],
+              )
+            : Response.json(
+                apiFormat === 'openai_chat'
+                  ? { choices: [{ message: { content: 'ok' } }] }
+                  : { output_text: 'ok' },
+              );
+          const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response);
+          const onDelta = vi.fn();
+          await streamCompletion(
+            { ...provider, apiFormat, stream, reasoningEffort: effort },
+            '',
+            [],
+            4096,
+            signal,
+            onDelta,
+            fetcher,
+          );
+          const body = JSON.parse(String(fetcher.mock.calls[0]![1]!.body));
+          expect(body.stream).toBe(stream);
+          if (apiFormat === 'openai_chat') {
+            expect(body.reasoning_effort).toBe(effort);
+            expect(body).not.toHaveProperty('reasoning');
+          } else {
+            expect(body.reasoning).toEqual({ effort });
+            expect(body).not.toHaveProperty('reasoning_effort');
+          }
+          expect(onDelta).toHaveBeenCalledWith('ok');
+        }
+      }
+    },
+  );
+  it('does not send OpenAI reasoning parameters to Anthropic even with a stale setting', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ content: [{ type: 'text', text: 'ok' }] }));
+    await streamCompletion(
+      { ...provider, apiFormat: 'anthropic', reasoningEffort: 'high', stream: false },
+      '',
+      [],
+      4096,
+      signal,
+      vi.fn(),
+      fetcher,
+    );
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]!.body));
+    expect(body).not.toHaveProperty('reasoning');
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body).not.toHaveProperty('thinking');
+  });
+  it('rejects an invalid saved effort before sending a request', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    await expect(
+      streamCompletion(
+        { ...provider, reasoningEffort: 'invalid-secret' as ReasoningEffort },
+        '',
+        [],
+        4096,
+        signal,
+        vi.fn(),
+        fetcher,
+      ),
+    ).rejects.toThrow('推理强度设置无效');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each(['reasoning_effort', 'reasoning.effort'])(
+    'reports an unsupported %s without leaking server text or retrying',
+    async (param) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          Response.json(
+            { error: { param, message: 'invalid effort; private diagnostics' } },
+            { status: 400 },
+          ),
+        );
+      const onDelta = vi.fn();
+      const error = await streamCompletion(
+        { ...provider, reasoningEffort: 'high' },
+        '',
+        [],
+        4096,
+        signal,
+        onDelta,
+        fetcher,
+      ).catch((value: Error) => value);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(`参数：${param.split('.')[0]}`);
+      expect((error as Error).message).not.toContain('private diagnostics');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(onDelta).not.toHaveBeenCalled();
+    },
+  );
+});
+
 it('uses direct ChatGPT account credentials, stateless input and one 401 refresh retry', async () => {
   const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');
   const credentials = vi
@@ -169,6 +385,7 @@ it('uses direct ChatGPT account credentials, stateless input and one 401 refresh
       apiFormat: 'openai_responses',
       baseUrl: CHATGPT_PROVIDER_URL,
       apiKey: '',
+      reasoningEffort: 'high',
       chatgpt: { connectionId: 'id', email: '' },
     },
     'instructions',
@@ -192,8 +409,10 @@ it('uses direct ChatGPT account credentials, stateless input and one 401 refresh
     instructions: 'instructions',
     store: false,
     stream: true,
+    reasoning: { effort: 'high' },
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'question' }] }],
   });
+  expect(fetcher.mock.calls[0]![1]!.body).toBe(request.body);
 });
 it('stops immediately while account credentials are refreshing', async () => {
   const { CHATGPT_PROVIDER_URL } = await import('../config/chatgpt');

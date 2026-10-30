@@ -3,7 +3,11 @@ import { Repository } from '../lib/storage/repository';
 import { errorText } from '../lib/platform/rpc';
 import { extractionInjectionError, providerOrigin } from '../lib/platform/permissions';
 import { isReadableUrl, pageKey } from '../lib/domain/page';
+import { summaryPrompt } from '../lib/domain/settings';
+import { validateReasoningEffort } from '../lib/domain/reasoning';
 import { extractorFor } from '../lib/extraction/registry';
+import { readVideoPage } from '../lib/extraction/video-page';
+import { videoSource } from '../lib/extraction/video';
 import { listModels } from '../lib/llm/client';
 import { browserAccounts } from '../lib/auth/chatgpt';
 import { CHATGPT_PROVIDER_URL, CHATGPT_REDIRECT_URI } from '../config/chatgpt';
@@ -62,6 +66,7 @@ export default defineBackground(() => {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  const pendingVideos = new Map<number, symbol>();
   const extensionPage = (sender: chrome.runtime.MessageSender, paths: string[]) => {
     if (sender.id !== chrome.runtime.id || !sender.url) return false;
     try {
@@ -114,6 +119,7 @@ export default defineBackground(() => {
     return serializeEngine(() => dispatchEngine<T>(request));
   }
   async function validateProvider(provider: Provider) {
+    validateReasoningEffort(provider.reasoningEffort);
     if (
       provider.authType === 'chatgpt' &&
       (provider.baseUrl !== CHATGPT_PROVIDER_URL ||
@@ -126,6 +132,8 @@ export default defineBackground(() => {
       throw new Error('请填写供应商名称和模型。');
     if (!['openai_chat', 'anthropic', 'openai_responses'].includes(provider.apiFormat))
       throw new Error('请选择受支持的 API 协议。');
+    if (provider.stream !== undefined && typeof provider.stream !== 'boolean')
+      throw new Error('流式输出设置无效，请重新保存供应商。');
     if (
       !Number.isInteger(provider.contextLimit) ||
       provider.contextLimit < 4096 ||
@@ -142,7 +150,46 @@ export default defineBackground(() => {
       throw new Error('当前页面受浏览器限制，无法读取。请打开普通网页。');
     if (pageKey(tab.url!) !== expected) throw new Error('来源页面已变化，请重新提取。');
     const adapter = extractorFor(tab.url!);
-    if (pendingExtractions.has(tabId)) throw new Error('此标签页正在提取正文，请稍候。');
+    if (pendingExtractions.has(tabId) || pendingVideos.has(tabId))
+      throw new Error('此标签页正在提取内容，请稍候。');
+    if ('video' in adapter) {
+      const token = Symbol();
+      pendingVideos.set(tabId, token);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const results = await Promise.race([
+          chrome.scripting
+            .executeScript({
+              target: { tabId },
+              world: 'MAIN',
+              func: readVideoPage,
+              args: [
+                adapter.video.platform,
+                tab.url!,
+                adapter.video.videoId,
+                adapter.video.part ?? 1,
+              ],
+            })
+            .catch((error) => {
+              throw new Error(extractionInjectionError(error));
+            }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('字幕提取超时，请刷新视频后重试。')), 15000);
+          }),
+        ]);
+        const result = results.find((item) => item.frameId === 0)?.result;
+        if (!result?.ok || !result.data)
+          throw new Error(result?.error || '字幕提取失败，请刷新后重试。');
+        // Read tabs again: SPA navigation can finish while a caption fetch awaits.
+        const current = await chrome.tabs.get(tabId);
+        if (current.url !== tab.url || (current.pendingUrl && current.pendingUrl !== tab.url))
+          throw new Error('提取过程中视频已变化，请重新提取。');
+        return videoSource(result.data, tab.url!);
+      } finally {
+        clearTimeout(timer);
+        if (pendingVideos.get(tabId) === token) pendingVideos.delete(tabId);
+      }
+    }
     return new Promise<PageSource>((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingExtractions.delete(tabId);
@@ -223,7 +270,7 @@ export default defineBackground(() => {
           return { ...config, currentProviderId: request.id };
         });
       case 'settings:save':
-        return repository.updateConfig((config) => ({ ...config, settings: request.settings }));
+        return repository.saveSettings(request.settings);
       case 'models:list': {
         const origin = providerOrigin(request.provider.baseUrl);
         if (!(await chrome.permissions.contains({ origins: [origin] })))
@@ -253,13 +300,16 @@ export default defineBackground(() => {
           const provider = config.providers.find((p) => p.id === config.currentProviderId);
           if (!provider) throw new Error('请先添加并选择 AI 供应商。');
           await validateProvider(provider);
-          if (!request.question.trim()) throw new Error('请输入问题。');
+          const question = request.summary
+            ? summaryPrompt(request.conversation.source, config.settings)
+            : request.question;
+          if (!question.trim()) throw new Error('请输入问题或在设置中填写摘要指令。');
           if (!request.conversation.source.content.trim())
             throw new Error('没有可用正文，请重新提取。');
           return dispatchEngine({
             target: 'engine',
             type: 'start',
-            task: { ...request, provider, settings: config.settings },
+            task: { ...request, question, provider, settings: config.settings },
           });
         });
       case 'task:snapshot':
