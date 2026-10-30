@@ -41,7 +41,7 @@ OpenAI Chat Completions、Responses 和 ChatGPT 账号供应商可在模型下�
 
 HTTP 400 表示请求被拒绝，插件会尽可能显示 `stream`、`input`、`max_output_tokens` 等已知参数名，方便排查；不会展示可能包含密钥或正文的服务端原始错误消息。HTTP 503 可能涉及供应商或上游通道，不能仅凭状态码确认密钥是否正确，或断定具体故障原因。
 
-导入支持 Claude Code settings JSON、Codex API Key JSON / provider TOML、OpenCode JSON 和通用 JSON。仅保存解析后的必要字段，不保存配置原文。不读取本机隐藏目录，不支持 OAuth 令牌导入。
+导入支持 Claude Code settings JSON、Codex API Key JSON / provider TOML、OpenCode JSON 和通用 JSON。仅保存解析后的必要字段，不保存配置原文。不读取本机隐藏目录；ChatGPT 账号凭证通过专用 `auth.json` 编辑区管理。
 
 ### 使用 ChatGPT 账号
 
@@ -49,7 +49,7 @@ HTTP 400 表示请求被拒绝，插件会尽可能显示 `stream`、`input`、`
 
 这是 Codex 兼容接入，使用 ChatGPT 账号授权及 Codex Responses 后端，与 API Key 模式、OpenAI 动态注册 OSS 客户端流程不同。真实账号的授权、回调地址接受情况、模型权限及地区策略仍需用户联调；自动测试使用模拟身份，不代表真实平台已验收。
 
-令牌由后台 Repository 保存到浏览器扩展本地存储，未加密；配置和界面只持有连接 ID 与账号显示信息。使用时自动刷新，401 后最多刷新并重试一次。不读取或改写 Codex 的凭证文件，也不需要手动生成或粘贴 `auth.json` / `config.toml`。删除连接会移除此浏览器的凭证，远程授权需在 OpenAI 账号设置中管理。详见 [ChatGPT 登录说明](docs/CHATGPT_LOGIN.md)。
+令牌由后台 Repository 保存到浏览器扩展本地存储，未加密；供应商配置只持有连接 ID 与账号显示信息。使用时自动刷新，401 后最多刷新并重试一次。ChatGPT 配置页展示当前连接的 `auth.json`，支持复制、粘贴、直接编辑和「重新读取」；编辑后点击「保存连接」生效，不自动保存。从其他地方粘贴 JSON 后保存，会用粘贴内容整套覆盖当前连接的凭证，支持更换账号；也可在添加供应商时粘贴凭证，填写名称和模型后保存。直接编辑旧内容时仍检查刷新冲突；明确粘贴替换则以粘贴内容为准。此处是扩展凭证的 JSON 表示，不读取或改写本机 Codex 文件。删除连接会移除此浏览器的凭证，远程授权需在 OpenAI 账号设置中管理。详见 [ChatGPT 登录说明](docs/CHATGPT_LOGIN.md)。
 
 ### 自定义总结提示词
 

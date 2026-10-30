@@ -172,13 +172,51 @@ try {
   );
   await options.getByRole('button', { name: '保存连接', exact: true }).click();
   await expect(options.getByText('使用中', { exact: true })).toBeVisible();
-  const saved = await worker.evaluate(() => chrome.storage.local.get('config'));
+  let saved = await worker.evaluate(() => chrome.storage.local.get('config'));
   expect((saved.config as any).providers[0].reasoningEffort).toBe('high');
   expect(JSON.stringify(saved)).not.toContain(fixture.accessToken);
   expect(JSON.stringify(saved)).not.toContain(fixture.refreshToken);
   expect(JSON.stringify(saved)).not.toContain('idToken');
   const all = await worker.evaluate(() => chrome.storage.local.get(null));
   expect(JSON.stringify(all)).toContain(fixture.accessToken);
+  await options.getByRole('button', { name: '编辑 ChatGPT · reader@example.test' }).click();
+  const authEditor = options.getByRole('textbox', { name: '账号 auth.json', exact: true });
+  await expect
+    .poll(async () => (await authEditor.inputValue()).includes('access_token'))
+    .toBe(true);
+  const authDocument = await authEditor.inputValue();
+  expect(JSON.parse(authDocument).tokens.access_token).toBe(fixture.accessToken);
+  const replacement = JSON.parse(authDocument);
+  replacement.tokens.access_token = 'synthetic-manually-edited-access';
+  await options.evaluate((pasted) => {
+    (window as any).__authClipboard = '';
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as any).__authClipboard = text;
+        },
+        readText: async () => pasted,
+      },
+    });
+  }, JSON.stringify(replacement));
+  await options.getByRole('button', { name: '复制 auth.json', exact: true }).click();
+  expect(await options.evaluate(() => (window as any).__authClipboard)).toBe(authDocument);
+  await options.getByRole('button', { name: '粘贴 auth.json', exact: true }).click();
+  await expect(authEditor).toHaveValue(JSON.stringify(replacement));
+  await options.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(options.getByText('使用中', { exact: true })).toBeVisible();
+  const previousConnection = (saved.config as any).providers[0].chatgpt.connectionId;
+  saved = await worker.evaluate(() => chrome.storage.local.get('config'));
+  expect((saved.config as any).providers[0].chatgpt.connectionId).not.toBe(previousConnection);
+  const editedRecord = await worker.evaluate(
+    async (id) => {
+      const records = await chrome.storage.local.get('chatgpt-auth:' + id);
+      return (records['chatgpt-auth:' + id] as any).accessToken;
+    },
+    (saved.config as any).providers[0].chatgpt.connectionId,
+  );
+  expect(editedRecord).toBe('synthetic-manually-edited-access');
   const article = await context.newPage();
   await article.goto(`${issuer}/article`);
   const tabId = await worker.evaluate(
@@ -187,6 +225,16 @@ try {
   );
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html?tabId=${tabId}&mode=window`);
+  const deniedAuthRead = await panel.evaluate(
+    async (connectionId) =>
+      chrome.runtime.sendMessage({
+        channel: 'glintab:rpc',
+        request: { type: 'chatgpt:auth:get', connectionId },
+      }),
+    (saved.config as any).providers[0].chatgpt.connectionId,
+  );
+  expect(deniedAuthRead.ok).toBe(false);
+  expect(deniedAuthRead.error).toContain('仅设置页');
   const forbidden = await panel
     .evaluate(
       async (connectionId) => chrome.runtime.sendMessage({ channel: 'glintab:auth', connectionId }),
@@ -229,7 +277,9 @@ try {
           'catalog client_version and retry after 400 without reauthentication',
           'models and configuration save',
           'configured reasoning effort survives login and 401 retry',
-          'tokens excluded from config/UI responses',
+          'tokens excluded from routine config and login status responses',
+          'auth.json settings editor copies, pastes and manually saves credentials',
+          'sidepanel cannot read the settings-only auth.json endpoint',
           'direct Codex Responses via Worker',
           '401 refresh and single retry',
           'account header and stateless payload',

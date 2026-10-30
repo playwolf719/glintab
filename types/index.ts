@@ -132,8 +132,15 @@ export type Request =
   | { type: 'chatgpt:login:status'; flowId: string; statusKey: string }
   | { type: 'chatgpt:login:cancel'; flowId: string; statusKey: string }
   | { type: 'chatgpt:connection:discard'; connectionId: string; draftKey: string }
+  | { type: 'chatgpt:auth:get'; connectionId: string; draftKey?: string }
   | { type: 'config:get' }
-  | { type: 'provider:save'; provider: Provider }
+  | {
+      type: 'provider:save';
+      provider: Provider;
+      authJson?: string;
+      authRevision?: string;
+      replaceAuth?: boolean;
+    }
   | { type: 'provider:delete'; id: string }
   | { type: 'provider:select'; id: string }
   | { type: 'settings:save'; settings: Settings }
@@ -166,6 +173,11 @@ export interface RpcResponse<T = unknown> {
   error?: string;
 }
 
+export interface AuthJsonSnapshot {
+  json: string;
+  revision: string;
+  invalid: boolean;
+}
 // Private records are only read/written by background Repository instances.
 export interface ChatGPTAuthRecord {
   version: 1;

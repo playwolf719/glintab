@@ -144,7 +144,13 @@ Worker 通过 offscreen 的 `glintab:audio` 专用消息向 background 申请音
 
 ChatGPT 授权由 `lib/auth/` 管理，background 只协调浏览器标签页与导航事件。固定登录标签页与精确回调 origin / port / path，并校验 state、PKCE、nonce 与 ID-token 签名；不要求 localhost 监听器。导航事件捕获回调，状态查询以 pendingUrl / url 兜底。回调的授权码先标记已消费，再交换令牌，避免重复事件复用。
 
-`Repository(chrome.storage.local)` 独占 `chatgpt-auth:<id>` 凭证写入；`Repository(chrome.storage.session)` 保存短期登录流程与 PKCE，支持后台重启，浏览器退出后不保留未完成流程。后台重启遇到交换中的流程会要求重新登录，不重复消费授权码。配置只保存连接 ID / email；界面、任务快照和广播事件不携带令牌。过期未保存的连接会清理，已保存记录在恢复时保留。
+`Repository(chrome.storage.local)` 独占 `chatgpt-auth:<id>` 凭证写入；`Repository(chrome.storage.session)` 保存短期登录流程与 PKCE，支持后台重启，浏览器退出后不保留未完成流程。后台重启遇到交换中的流程会要求重新登录，不重复消费授权码。配置只保存连接 ID / email；常规界面响应、任务快照和广播事件不携带令牌。过期未保存的连接会清理，已保存记录在恢复时保留。
+
+设置页的专用 `chatgpt:auth:get` 是完整凭证读取的显式例外，侧栏、offscreen 和内容脚本均不可调用。请求需匹配已保存连接，或提供有效登录草稿的 `draftKey`。响应只在编辑组件的内存中保存，含 JSON 表示及独立的仓储 revision；普通 `config:get`、登录状态、会话和广播仍不含令牌。
+
+`lib/domain/auth-json.ts` 校验 128,000 字符上限和必要字段，丢弃未知字段；`ChatGPTOAuth.importAuthJson` 校验缓存 ID token 的签名、issuer、audience、subject 和导入凭证内部的账号一致性，JWT 访问令牌的 `exp` 优先于扩展附加的 `expires_at`。`provider:save` 的可选 `authJson / authRevision / replaceAuth` 仅允许设置页提交，后台校验固定协议和域名权限，沿连接锁与刷新、重连、删除串行化。直接编辑仍检查 revision 且不能原样恢复本地已失效的刷新令牌；粘贴按钮和原生 paste 事件标记显式替换，允许切换账号、覆盖期间刷新的凭证，并在新记录中清除旧失效状态。
+
+显式替换分配新的 connectionId，保留供应商 ID、当前选中状态和模型配置，更新已验证的账号信息；仓储在同一次写入中提交凭证和配置，检查供应商仍绑定待替换连接，避免重建已删除或覆盖其他窗口新绑定的连接。成功后只清理不再被供应商引用的旧凭证，共享旧连接的其他供应商保留。旧任务继续绑定原 connectionId；原连接已无配置引用时，后续凭证请求被拒绝，不会改用新账号。写入失败保留旧记录，不保存 JSON 原文。粘贴仍仅在用户点击「保存连接」时提交。
 
 模型列表在后台请求，Codex 目录单独附加 `client_version` 查询参数，兼容版本集中在 `config/chatgpt.ts`；普通 API Key 模型列表保持原有路径。目录失败与登录失败分别显示，保留已授权连接供重试或手动选择模型。生成仍在 offscreen 专用 Worker 中执行。Worker 经 offscreen 的专用 `glintab:auth` 通道向后台取得短期 access token 和账号 ID，后台仅接受自己的 offscreen 页面，并检查连接仍在已保存配置中。刷新令牌始终不进入 Worker。请求固定到 Codex 后端，禁用 HTTP 重定向，使用账号 header、store:false / stream:true。API Key 模式继续访问用户配置的端点。
 

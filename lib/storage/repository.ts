@@ -94,6 +94,42 @@ export class Repository {
       return next;
     });
   }
+  saveChatGPTAuthJson(
+    provider: Provider,
+    record: ChatGPTAuthRecord,
+    expectedRevision?: string,
+    replacedConnectionId?: string,
+  ) {
+    return this.write(async () => {
+      const config = await this.loadConfig();
+      const current = await this.authRecord(record.id);
+      if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision))
+        throw new Error('凭证已刷新或修改，请重新读取 auth.json 后再编辑保存。');
+      const existing = config.providers.find((item) => item.id === provider.id);
+      if (replacedConnectionId && existing?.chatgpt?.connectionId !== replacedConnectionId)
+        throw new Error('供应商连接已变化，请重新打开设置。');
+      if (existing && existing.chatgpt?.connectionId !== (replacedConnectionId || record.id))
+        throw new Error('供应商连接已变化，请重新打开设置。');
+      const saved: Provider = {
+        ...provider,
+        apiKey: '',
+        chatgpt: { connectionId: record.id, email: record.email },
+      };
+      const next = {
+        ...config,
+        providers: [...config.providers.filter((item) => item.id !== saved.id), saved].sort(
+          (a, b) => a.createdAt - b.createdAt,
+        ),
+        currentProviderId: config.currentProviderId || saved.id,
+      };
+      try {
+        await this.driver.set({ config: next, ['chatgpt-auth:' + record.id]: record });
+      } catch {
+        throw new Error('账号凭证保存失败，请重试。');
+      }
+      return next;
+    });
+  }
   removeDraftAuthRecord(id: string) {
     return this.write(async () => {
       const used = (await this.loadConfig()).providers.some(

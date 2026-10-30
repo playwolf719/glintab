@@ -46,6 +46,7 @@ export async function browserAuthFixture(
     refreshes: 0,
     exchanges: 0,
     subject: 'synthetic-reader',
+    email: 'reader@example.test',
     accountId: 'synthetic-account',
     nonce: undefined as string | undefined,
     audience: CHATGPT_CLIENT_ID,
@@ -85,7 +86,7 @@ export async function browserAuthFixture(
     codes.delete(code);
     const token = await new SignJWT({
       nonce: controls.nonce || record.nonce,
-      email: 'reader@example.test',
+      email: controls.email,
       'https://api.openai.com/auth': { chatgpt_account_id: controls.accountId },
     })
       .setProtectedHeader({ alg: 'RS256' })

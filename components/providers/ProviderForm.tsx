@@ -8,6 +8,8 @@ import { grantProvider } from '../../lib/platform/permissions';
 import { errorText, rpc } from '../../lib/platform/rpc';
 import { ErrorBanner, IconButton } from '../ui/primitives';
 import { ChatGPTConnection } from './ChatGPTConnection';
+import { ChatGPTAuthEditor, type AuthJsonDraft } from './ChatGPTAuthEditor';
+import { CHATGPT_PERMISSION_ORIGINS, CHATGPT_PROVIDER_URL } from '../../config/chatgpt';
 
 export function ProviderForm({ provider, onClose }: { provider?: Provider; onClose(): void }) {
   const [value, setValue] = useState<Provider>(
@@ -25,6 +27,7 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
   const [showKey, setShowKey] = useState(false);
   const [authMode, setAuthMode] = useState<'api_key' | 'chatgpt'>(provider?.authType || 'api_key');
   const apiDraft = useRef(value);
+  const [authDocument, setAuthDocument] = useState<AuthJsonDraft>({ json: '', original: '' });
   const uncommitted = useRef<Provider | null>(null);
   useEffect(
     () => () => {
@@ -69,13 +72,15 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
           ...value,
           name: '',
           model: '',
-          baseUrl: '',
+          baseUrl: CHATGPT_PROVIDER_URL,
           apiKey: '',
+          apiFormat: 'openai_responses',
           authType: 'chatgpt',
           chatgpt: undefined,
         });
       } else setValue(apiDraft.current);
       setRaw('');
+      setAuthDocument({ json: '', original: '' });
       setModels([]);
       setError('');
       setAuthMode(mode);
@@ -115,8 +120,27 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
       if (!finalValue.name.trim() || !finalValue.model.trim())
         throw new Error('请填写供应商名称和模型；也可以先点击「填入表单」检查导入结果。');
       setBusy(true);
-      await grantProvider(finalValue.baseUrl);
-      await rpc({ type: 'provider:save', provider: finalValue });
+      const editingAuth =
+        authMode === 'chatgpt' &&
+        (authDocument.replace ||
+          authDocument.json !== authDocument.original ||
+          !finalValue.chatgpt);
+      if (editingAuth) {
+        if (!authDocument.json.trim()) throw new Error('请先授权账号或粘贴 auth.json。');
+        if (!(await chrome.permissions.request({ origins: CHATGPT_PERMISSION_ORIGINS })))
+          throw new Error('需要允许访问 OpenAI 授权与 ChatGPT 模型服务。');
+      } else await grantProvider(finalValue.baseUrl);
+      await rpc({
+        type: 'provider:save',
+        provider: finalValue,
+        ...(editingAuth
+          ? {
+              authJson: authDocument.json,
+              authRevision: authDocument.revision,
+              replaceAuth: !!authDocument.replace,
+            }
+          : {}),
+      });
       uncommitted.current = null;
       onClose();
     } catch (e) {
@@ -190,6 +214,14 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
         <ChatGPTConnection
           provider={provider}
           onConnected={(connection) => void connected(connection)}
+        />
+      )}
+      {authMode === 'chatgpt' && (
+        <ChatGPTAuthEditor
+          connection={value.chatgpt}
+          value={authDocument}
+          onChange={setAuthDocument}
+          disabled={busy}
         />
       )}
       <form onSubmit={save} className="settings-form">
@@ -300,7 +332,7 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
             <button
               type="button"
               className="button secondary"
-              disabled={busy || !value.baseUrl}
+              disabled={busy || !value.baseUrl || (authMode === 'chatgpt' && !value.chatgpt)}
               onClick={() => void getModels()}
             >
               <Download size={14} />
@@ -392,7 +424,9 @@ export function ProviderForm({ provider, onClose }: { provider?: Provider; onClo
           <button
             type="submit"
             className="button primary"
-            disabled={busy || (authMode === 'chatgpt' && !value.chatgpt)}
+            disabled={
+              busy || (authMode === 'chatgpt' && !value.chatgpt && !authDocument.json.trim())
+            }
           >
             {busy ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />}
             {authMode === 'chatgpt' ? '保存连接' : '保存并授权'}

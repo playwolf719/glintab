@@ -1,7 +1,8 @@
-import type { ChatGPTAuthFlow, ChatGPTCredentials, Provider } from '../../types';
+import type { AuthJsonSnapshot, ChatGPTAuthFlow, ChatGPTCredentials, Provider } from '../../types';
 import type { ChatGPTFlow, ChatGPTLoginStatus } from '../../config/chatgpt';
 import { Repository } from '../storage/repository';
 import { ChatGPTOAuth, authorization, authRandom, callbackParameters } from './oauth';
+import { serializeAuthJson } from '../domain/auth-json';
 
 export interface AuthBrowser {
   create(): Promise<number>;
@@ -142,6 +143,8 @@ export class ChatGPTAccounts {
       flow.status === 'connected' && flow.connectionId
         ? await this.repository.authRecord(flow.connectionId)
         : undefined;
+    if (flow.status === 'connected' && !record)
+      return { status: 'error', error: 'ChatGPT 连接已被替换或删除，请重新打开设置。' };
     return {
       status: flow.status,
       error: flow.error,
@@ -174,6 +177,80 @@ export class ChatGPTAccounts {
     await this.exclusive('account:' + id, async () => {
       await this.repository.updateAuthRecord(id, () => undefined);
       this.blocked.delete(id);
+    });
+  }
+  private async editableRecord(id: string, draftKey?: string) {
+    const saved = (await this.repository.config()).providers.some(
+      (provider) => provider.authType === 'chatgpt' && provider.chatgpt?.connectionId === id,
+    );
+    const draft =
+      !saved &&
+      draftKey &&
+      Object.values(await this.session.authFlows()).some(
+        (flow) =>
+          flow.status === 'connected' &&
+          flow.connectionId === id &&
+          flow.statusKey === draftKey &&
+          flow.expiresAt > Date.now(),
+      );
+    const record = saved || draft ? await this.repository.authRecord(id) : undefined;
+    if (!record) throw new Error('ChatGPT 连接不存在或已过期，请重新打开设置。');
+    return record;
+  }
+  async authJson(id: string, draftKey?: string): Promise<AuthJsonSnapshot> {
+    return this.exclusive('account:' + id, async () => {
+      const record = await this.editableRecord(id, draftKey);
+      return {
+        json: serializeAuthJson(record),
+        revision: record.revision,
+        invalid: !!record.invalid,
+      };
+    });
+  }
+  async saveAuthJson(provider: Provider, raw: string, revision?: string, replace = false) {
+    const id = provider.chatgpt?.connectionId;
+    return this.exclusive(id ? 'account:' + id : 'import:' + provider.id, async () => {
+      const saved =
+        id &&
+        (await this.repository.config()).providers.find(
+          (item) => item.id === provider.id && item.chatgpt?.connectionId === id,
+        );
+      const previous = id
+        ? replace && saved
+          ? await this.repository.authRecord(id)
+          : await this.editableRecord(id, provider.chatgpt?.draftKey)
+        : undefined;
+      if (!replace && previous && (!revision || previous.revision !== revision))
+        throw new Error('凭证已刷新或修改，请重新读取 auth.json 后再编辑保存。');
+      const record = await this.oauth.importAuthJson(raw, previous, replace);
+      if (
+        !replace &&
+        previous &&
+        previous.subject === record.subject &&
+        previous.accountId === record.accountId &&
+        (previous.invalid || this.blocked.has(previous.id)) &&
+        record.refreshToken === previous.refreshToken
+      )
+        throw new Error('当前刷新令牌已失效，请粘贴新的凭证或重新登录。');
+      if (replace && id) record.id = crypto.randomUUID();
+      const updatedProvider = { ...provider };
+      const previousEmail = previous?.email || provider.chatgpt?.email;
+      if (replace && previousEmail && provider.name === `ChatGPT · ${previousEmail}`)
+        updatedProvider.name = `ChatGPT · ${record.email}`;
+      const result = await this.repository.saveChatGPTAuthJson(
+        updatedProvider,
+        record,
+        replace ? undefined : previous?.revision,
+        replace && saved ? id : undefined,
+      );
+      this.blocked.delete(record.id);
+      if (replace && id) {
+        // Old tasks retain their original connection identity. They must never
+        // retry a request using the replacement account's credentials.
+        await this.repository.removeDraftAuthRecord(id).catch(() => {});
+        this.blocked.delete(id);
+      }
+      return result;
     });
   }
   async credentials(id: string, rejectedRevision?: string): Promise<ChatGPTCredentials> {

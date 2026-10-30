@@ -18,7 +18,11 @@ import { readBilibiliAudio } from '../lib/extraction/bilibili-audio';
 import { videoSource } from '../lib/extraction/video';
 import { listModels } from '../lib/llm/client';
 import { browserAccounts } from '../lib/auth/chatgpt';
-import { CHATGPT_PROVIDER_URL, CHATGPT_REDIRECT_URI } from '../config/chatgpt';
+import {
+  CHATGPT_PERMISSION_ORIGINS,
+  CHATGPT_PROVIDER_URL,
+  CHATGPT_REDIRECT_URI,
+} from '../config/chatgpt';
 import type {
   EngineEvent,
   EngineRequest,
@@ -144,13 +148,13 @@ export default defineBackground(() => {
         await engine({ target: 'engine', type: 'cancel', tabId, streamId: snapshot.streamId });
     }
   }
-  async function validateProvider(provider: Provider) {
+  async function validateProvider(provider: Provider, importingAuth = false) {
     validateReasoningEffort(provider.reasoningEffort);
     if (
       provider.authType === 'chatgpt' &&
       (provider.baseUrl !== CHATGPT_PROVIDER_URL ||
         provider.apiFormat !== 'openai_responses' ||
-        !provider.chatgpt?.connectionId ||
+        (!importingAuth && !provider.chatgpt?.connectionId) ||
         provider.apiKey !== '')
     )
       throw new Error('ChatGPT 连接配置不完整，请重新登录。');
@@ -252,6 +256,8 @@ export default defineBackground(() => {
         return accounts.cancel(request.flowId, request.statusKey);
       case 'chatgpt:connection:discard':
         return accounts.discard(request.connectionId, request.draftKey);
+      case 'chatgpt:auth:get':
+        return accounts.authJson(request.connectionId, request.draftKey);
       case 'config:get':
         return repository.config();
       case 'provider:save': {
@@ -261,7 +267,21 @@ export default defineBackground(() => {
           model: request.provider.model.trim(),
           baseUrl: request.provider.baseUrl.trim().replace(/\/+$/, ''),
         };
-        await validateProvider(provider);
+        await validateProvider(provider, request.authJson !== undefined);
+        if (request.authJson !== undefined) {
+          if (provider.authType !== 'chatgpt')
+            throw new Error('auth.json 仅用于 ChatGPT 账号连接。');
+          if (!(await chrome.permissions.contains({ origins: CHATGPT_PERMISSION_ORIGINS })))
+            throw new Error('请先允许 OpenAI 授权和模型域名访问。');
+          if (request.replaceAuth !== undefined && typeof request.replaceAuth !== 'boolean')
+            throw new Error('凭证替换选项无效。');
+          return accounts.saveAuthJson(
+            provider,
+            request.authJson,
+            request.authRevision,
+            request.replaceAuth,
+          );
+        }
         if (provider.authType === 'chatgpt') return repository.saveChatGPTProvider(provider);
         return repository.updateConfig((config) => ({
           ...config,
@@ -553,6 +573,14 @@ export default defineBackground(() => {
     if (message?.channel === 'glintab:rpc') {
       if (!extensionPage(sender, ['/sidepanel.html', '/options.html'])) {
         respond({ ok: false, error: '无权调用此接口。' });
+        return;
+      }
+      if (
+        (message.request?.type === 'chatgpt:auth:get' ||
+          (message.request?.type === 'provider:save' && message.request.authJson !== undefined)) &&
+        !extensionPage(sender, ['/options.html'])
+      ) {
+        respond({ ok: false, error: '仅设置页可查看或编辑账号凭证。' });
         return;
       }
       return send(handle(message.request));

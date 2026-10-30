@@ -36,7 +36,11 @@ MAIN 中的视频元信息和播放地址请求沿用 B 站登录态，不读取
 
 选择 ChatGPT 登录时，扩展打开 OpenAI 授权页，使用 PKCE 获取授权。后台仅观察自己创建的登录标签页，捕获固定回调地址的主框架导航并校验 state。不会抓取 ChatGPT Cookie 或网页 session token。此接入使用 Codex 兼容客户端与后端，真实平台可用性仍需联调。
 
-OpenAI access / refresh / ID token 由后台 Repository 保存在浏览器扩展本地存储的独立凭证记录中，**未加密**。存储限制为 TRUSTED_CONTEXTS，不向网站内容脚本开放；供应商配置、界面响应、会话历史和任务广播不携带这些 token。生成 Worker 只通过专用后台通道获取请求所需的 access token 与账号 ID，refresh token 不传给 Worker。短期 PKCE 参数保存在扩展 session 存储，完成或取消后清除敏感参数。
+OpenAI access / refresh / ID token 由后台 Repository 保存在浏览器扩展本地存储的独立凭证记录中，**未加密**。存储限制为 TRUSTED_CONTEXTS，不向网站内容脚本开放；供应商配置、常规界面响应、会话历史和任务广播不携带这些 token。生成 Worker 只通过专用后台通道获取请求所需的 access token 与账号 ID，refresh token 不传给 Worker。短期 PKCE 参数保存在扩展 session 存储，完成或取消后清除敏感参数。
+
+ChatGPT 供应商配置页的 `auth.json` 编辑区是按需显示完整令牌的专用界面，内容只在该设置页的内存中使用；侧栏、内容脚本和普通配置接口无法读取。可以复制、粘贴和编辑，复制会将完整凭证写入系统剪贴板；关闭设置不会自动清除剪贴板。点击「保存连接」后，后台只保存解析出的必要令牌和账号字段，不保存粘贴原文或未知字段。保存时可能访问 OpenAI 身份验证公钥，不会把粘贴全文发给第三方；后续模型请求和凭证刷新仍访问原有固定服务。此功能不读取或修改电脑上的 Codex 文件，也不自动保存未提交的编辑。
+
+明确粘贴 `auth.json` 后保存会覆盖当前供应商使用的整套账号凭证，支持更换账号，即使后台刚刷新过旧凭证也以粘贴内容为准。替换成功后，新请求使用新账号；旧任务不会在重试时切换至新账号。未被其他供应商引用的旧凭证会移除，共享旧凭证的其他供应商保留。
 
 授权、身份签名验证与刷新访问 `auth.openai.com`；模型列表和聊天请求直接访问 `chatgpt.com/backend-api/codex`；模型目录请求附带目录兼容版本 `client_version`，不包含额外用户信息。没有本机代理、常驻服务或 Native Messaging 组件，不读写 Codex 或旧版 `.glintab/auth.json` 文件。已有旧版本文件不会自动迁移或删除，用户可自行清理。
 

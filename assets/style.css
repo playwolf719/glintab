@@ -1077,6 +1077,22 @@
     padding: 18px 0;
     border-bottom: 1px solid var(--line);
   }
+  .auth-json-editor {
+    margin: 24px 0;
+    max-width: 620px;
+  }
+  .auth-json-editor textarea {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .auth-json-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
   .domain-prompt-rule h3 {
     font-size: 12px;
     font-weight: 550;

@@ -1,6 +1,13 @@
-import { createRemoteJWKSet, jwtVerify, decodeJwt, type JWTVerifyGetKey } from 'jose';
+import {
+  compactVerify,
+  createRemoteJWKSet,
+  jwtVerify,
+  decodeJwt,
+  type JWTVerifyGetKey,
+} from 'jose';
 import { CHATGPT_AUTH_ORIGIN, CHATGPT_CLIENT_ID, CHATGPT_REDIRECT_URI } from '../../config/chatgpt';
 import type { ChatGPTAuthRecord, ChatGPTAuthFlow } from '../../types';
+import { parseAuthJson } from '../domain/auth-json';
 
 function base64url(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes))
@@ -185,5 +192,80 @@ export class ChatGPTOAuth {
       }),
     );
     return this.record(data, previous);
+  }
+  async importAuthJson(
+    raw: string,
+    previous?: ChatGPTAuthRecord,
+    replace = false,
+  ): Promise<ChatGPTAuthRecord> {
+    const tokens = parseAuthJson(raw);
+    let payload;
+    try {
+      // auth.json caches identity tokens beyond their original login session.
+      // Check their signature and identity, without treating cached exp as an
+      // access-token lifetime or consuming a rotating refresh token on import.
+      await compactVerify(tokens.id_token, await this.signingKeys(), { algorithms: ['RS256'] });
+      payload = decodeJwt(tokens.id_token);
+    } catch {
+      throw new Error('auth.json 的身份令牌验证失败，请检查凭证或重新登录。');
+    }
+    const claims = payload['https://api.openai.com/auth'] as
+      { chatgpt_account_id?: string } | undefined;
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (
+      payload.iss !== CHATGPT_AUTH_ORIGIN ||
+      !audiences.includes(CHATGPT_CLIENT_ID) ||
+      typeof payload.sub !== 'string' ||
+      !payload.sub ||
+      !Number.isFinite(payload.exp) ||
+      !Number.isFinite(payload.iat) ||
+      payload.iat! <= 0 ||
+      payload.exp! <= payload.iat! ||
+      payload.iat! > Date.now() / 1000 + 60 ||
+      claims?.chatgpt_account_id !== tokens.account_id
+    )
+      throw new Error('auth.json 的账号身份或客户端不匹配。');
+    const sameIdentity =
+      previous?.subject === payload.sub && previous?.accountId === tokens.account_id;
+    if (previous && !sameIdentity && !replace)
+      throw new Error('auth.json 属于其他账号，请通过添加供应商建立新连接。');
+    let expiresAt = tokens.expiresAt;
+    try {
+      const access = decodeJwt(tokens.access_token);
+      if (typeof access.exp !== 'number' || !Number.isFinite(access.exp) || access.exp <= 0)
+        throw new Error();
+      const account = access['https://api.openai.com/auth'] as
+        { chatgpt_account_id?: string } | undefined;
+      if (account?.chatgpt_account_id && account.chatgpt_account_id !== tokens.account_id)
+        throw new Error('account mismatch');
+      expiresAt = access.exp * 1000;
+    } catch (error) {
+      if (
+        tokens.access_token.split('.').length === 3 ||
+        (error instanceof Error && error.message === 'account mismatch')
+      )
+        throw new Error('auth.json 的访问令牌或账号不匹配。');
+    }
+    if (
+      !expiresAt ||
+      !Number.isFinite(expiresAt) ||
+      !Number.isFinite(new Date(expiresAt).getTime())
+    )
+      throw new Error('无法读取访问令牌有效期；非 JWT 令牌需填写 expires_at。');
+    return {
+      version: 1,
+      id: previous?.id || crypto.randomUUID(),
+      subject: payload.sub,
+      accountId: tokens.account_id,
+      email:
+        typeof payload.email === 'string'
+          ? payload.email
+          : (sameIdentity ? previous?.email : undefined) || 'ChatGPT 账号',
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      idToken: tokens.id_token,
+      expiresAt,
+      revision: crypto.randomUUID(),
+    };
   }
 }
