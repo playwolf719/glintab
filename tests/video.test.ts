@@ -94,10 +94,12 @@ it('uses current player identity and rejects stale SPA metadata before fetching'
 });
 it('fails clearly without summarizing video navigation when there are no captions', async () => {
   player([]);
-  vi.stubGlobal('fetch', vi.fn());
-  expect((await readVideoPage('youtube', youtube, 'abcdefghijk')).error).toContain(
-    '没有可读取的字幕',
-  );
+  const fetcher = vi.fn();
+  vi.stubGlobal('fetch', fetcher);
+  const result = await readVideoPage('youtube', youtube, 'abcdefghijk');
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe('此 YouTube 视频没有可读取的字幕，暂时无法总结。');
+  expect(fetcher).not.toHaveBeenCalled();
 });
 it('rejects untrusted caption destinations without making a request', async () => {
   player([{ ...track, baseUrl: 'https://attacker.test/subtitle' }]);

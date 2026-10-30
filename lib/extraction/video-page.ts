@@ -89,8 +89,7 @@ export async function readVideoPage(
       if (response?.videoDetails?.videoId !== videoId)
         throw new Error('播放器尚未加载当前视频，请等待加载完成或刷新后重试。');
       const track = choose(response.captions?.playerCaptionsTracklistRenderer?.captionTracks || []);
-      if (!track?.baseUrl)
-        throw new Error('当前视频没有可读取的字幕，请开启字幕后重试；暂不支持音频转写。');
+      if (!track?.baseUrl) throw new Error('此 YouTube 视频没有可读取的字幕，暂时无法总结。');
       const url = allowed(track.baseUrl, 'youtube');
       if (url.searchParams.get('v') && url.searchParams.get('v') !== videoId)
         throw new Error('字幕与当前视频不匹配，请刷新后重试。');

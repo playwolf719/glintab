@@ -665,6 +665,33 @@ try {
     },
   );
   await step(
+    'YouTube without captions never invokes ASR even when Bilibili transcription is enabled',
+    async () => {
+      const videoUrl = 'https://www.youtube.com/watch?v=nocaption12';
+      const video = await context.newPage();
+      await video.goto(videoUrl);
+      const videoTabId = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        videoUrl,
+      );
+      const videoPanel = await openPanel(videoTabId);
+      try {
+        const before = requests.length;
+        const asrBefore = transcriptions.length;
+        await videoPanel.getByRole('button', { name: '帮我总结这个视频' }).click();
+        await expect(videoPanel.getByRole('alert')).toContainText(
+          '此 YouTube 视频没有可读取的字幕，暂时无法总结。',
+        );
+        expect(requests.length).toBe(before);
+        expect(transcriptions.length).toBe(asrBefore);
+        await expect(videoPanel.getByRole('button', { name: '发送问题' })).toBeVisible();
+      } finally {
+        await videoPanel.close();
+        await video.close();
+      }
+    },
+  );
+  await step(
     'ungranted sites offer one-time all-sites access and preserve the question',
     async () => {
       const url = 'http://ungranted.test/article';
