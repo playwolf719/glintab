@@ -71,6 +71,12 @@ Worker 使用 WXT unlisted script 单独构建，通过 `chrome.runtime.getURL('
 
 每次开始任务先保存问题和待回答消息；成功、错误、停止均保存终态。流式事件包含累计回答，限制为约 80ms 广播一次。面板打开时并行请求缓存会话和引擎快照；不按“最近两分钟有 user 消息”等启发式推断任务存活。
 
+「刷新页面并摘要」通过 `page:refresh-summary / page:refresh-status / page:refresh-cancel` 交给后台 `PageRefreshManager`，仅聊天面板可调用，固定来源面板必须匹配 tabId 和显示模式。任务规则放在 `lib/engine/page-refresh.ts`，浏览器加载等待放在 `lib/platform/page-reload.ts`。开始前校验供应商和来源，在 session Repository 写入 `page-refresh:<tabId>` 保留刷新 ID、独立 streamId、pageKey、阶段及显示模式，随后检查运行任务并刷新；写入失败不刷新、不调用模型。按标签页串行受理，普通任务启动也检查刷新占位，防止多面板抢占和重复点击。
+
+加载等待监听主标签页更新和关闭，并比较主框架新旧 documentId；只有新文档 complete 后才恢复抽屉、重新提取并启动标准摘要流程，25 秒未完成则报错。准备期间持续检查 pageKey 和 pendingUrl，跳转或关闭不使用新页面或旧提取结果；取消在提取后、启动前再次检查，启动已在途或已完成的迟到取消只停止该任务的 streamId。原面板销毁不影响后台流程，恢复后从受控状态请求、session 变更和引擎快照重连，旧流事件不能覆盖刷新状态。所有准备状态和正文持久化仍由后台仓储写入，配置和默认注入权限不变。
+
+后台重启时，若已存在同 streamId 引擎快照则继续展示；否则把中断的准备标为失败，不自动重复刷新或计费请求。准备阶段状态写入失败时，存活后台提供失败状态供面板轮询恢复；未读取新内容前保留旧会话。清除数据前要求取消所有准备任务。页面刷新只等待浏览器文档加载完成，不能保证任意站点的后续异步数据都已加载。
+
 后台对引擎命令和 idle 关闭使用串行队列，防止检查空闲后恰好开始的新任务被关闭。引擎快照为空闲清理前的内存状态，不是浏览器退出后的断点续传。浏览器重启时恢复已保存历史，不能继续旧网络连接。
 
 ### 存储
@@ -173,3 +179,5 @@ ChatGPT 授权由 `lib/auth/` 管理，background 只协调浏览器标签页与
 - [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 
 构建依赖由 `package-lock.json` 锁定；使用 `npm ci` 复现。CI 使用 Node.js 22，执行类型检查、测试、构建和隔离浏览器验收。
+
+发布材料由 `scripts/prepare-release.mjs` 在开发环境生成，入口为 `npm run release:materials`，不会进入扩展运行时。它使用已有生产构建的临时副本、隔离浏览器配置和仅监听回环地址的固定演示服务截取实际界面；临时 host 权限不回写生产 Manifest，设置保存仍经过产品后台 Repository。隐私政策 HTML 从 `docs/PRIVACY.md` 生成，发布者字段由 `docs/release/publisher.json` 核对；公开托管地址未配置时保留为空，不虚构外部站点。`release:demo` 仅提供本机演示，不是产品依赖或登录组件。

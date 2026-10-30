@@ -33,6 +33,7 @@ await writeFile(manifestPath, JSON.stringify(manifest));
 await mkdir(artifactPath, { recursive: true });
 const requests = [];
 const transcriptions = [];
+let refreshDocuments = 0;
 let transcriptionMode = 'timed';
 const timers = new Set();
 const server = createServer(async (req, res) => {
@@ -159,6 +160,14 @@ const server = createServer(async (req, res) => {
       clearInterval(timer);
       timers.delete(timer);
     });
+    return;
+  }
+  if (req.url === '/refresh-source') {
+    const marker = `REFRESH-DOCUMENT-${++refreshDocuments}`;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(
+      `<title>Fresh source</title><article><h1>${marker}</h1><p>${`New page evidence ${marker}. `.repeat(80)}</p></article>`,
+    );
     return;
   }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -953,16 +962,25 @@ try {
       await capture(options, 'settings-domain-prompts.png', true);
 
       const invalid = await options.evaluate(async () => {
-        const { data } = await chrome.runtime.sendMessage({ type: 'config:get' });
+        const { data } = await chrome.runtime.sendMessage({
+          channel: 'glintab:rpc',
+          request: { type: 'config:get' },
+        });
         const rules = data.settings.domainPrompts;
         const result = await chrome.runtime.sendMessage({
-          type: 'settings:save',
-          settings: {
-            ...data.settings,
-            domainPrompts: [...rules, { ...rules[0], id: 'duplicate' }],
+          channel: 'glintab:rpc',
+          request: {
+            type: 'settings:save',
+            settings: {
+              ...data.settings,
+              domainPrompts: [...rules, { ...rules[0], id: 'duplicate' }],
+            },
           },
         });
-        const after = await chrome.runtime.sendMessage({ type: 'config:get' });
+        const after = await chrome.runtime.sendMessage({
+          channel: 'glintab:rpc',
+          request: { type: 'config:get' },
+        });
         return {
           result,
           unchanged: JSON.stringify(after.data.settings) === JSON.stringify(data.settings),
@@ -1121,6 +1139,78 @@ try {
       },
     );
   }
+  await step(
+    'reload summary reads the new document and restores a drawer destroyed by navigation',
+    async () => {
+      const source = await context.newPage();
+      await source.goto(`${baseUrl}/refresh-source`);
+      const id = await worker.evaluate(
+        async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+        source.url(),
+      );
+      const refreshPanel = await openPanel(id);
+      try {
+        const before = requests.length;
+        await refreshPanel.getByRole('button', { name: '刷新页面并摘要', exact: true }).click();
+        await expect(
+          refreshPanel.getByRole('button', { name: '重新摘要', exact: true }),
+        ).toBeVisible({ timeout: 15000 });
+        expect(refreshDocuments).toBe(2);
+        expect(requests.length).toBe(before + 1);
+        expect(JSON.stringify(requests.at(-1))).toContain('REFRESH-DOCUMENT-2');
+        expect(JSON.stringify(requests.at(-1))).not.toContain('REFRESH-DOCUMENT-1');
+        await refreshPanel.getByRole('button', { name: '查看正文', exact: true }).click();
+        await expect(refreshPanel.getByRole('dialog')).toContainText('REFRESH-DOCUMENT-2');
+        await refreshPanel.keyboard.press('Escape');
+        await capture(refreshPanel, 'refresh-summary.png');
+        await worker.evaluate(async (tabId) => {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['content-scripts/drawer.js'],
+          });
+          await chrome.tabs.sendMessage(tabId, { channel: 'glintab:drawer', open: true });
+        }, id);
+        await expect
+          .poll(() => source.frames().some((frame) => frame.url().includes('mode=drawer')))
+          .toBe(true);
+        const oldFrame = source.frames().find((frame) => frame.url().includes('mode=drawer'));
+        await source.bringToFront();
+        const oldFrameElement = await oldFrame.frameElement();
+        await expect
+          .poll(() =>
+            oldFrameElement.evaluate((node) => Math.round(node.getBoundingClientRect().right)),
+          )
+          .toBe(420);
+        await oldFrame
+          .getByRole('button', { name: '刷新页面并摘要', exact: true })
+          .click()
+          .catch((error) => {
+            if (!/detached|destroyed/i.test(error.message)) throw error;
+          });
+        await expect
+          .poll(
+            () =>
+              source
+                .frames()
+                .some((frame) => frame !== oldFrame && frame.url().includes('mode=drawer')),
+            { timeout: 15000 },
+          )
+          .toBe(true);
+        const restored = source
+          .frames()
+          .find((frame) => frame !== oldFrame && frame.url().includes('mode=drawer'));
+        await expect(restored.getByRole('button', { name: '重新摘要', exact: true })).toBeVisible({
+          timeout: 15000,
+        });
+        expect(refreshDocuments).toBe(3);
+        expect(requests.length).toBe(before + 2);
+        expect(JSON.stringify(requests.at(-1))).toContain('REFRESH-DOCUMENT-3');
+      } finally {
+        await refreshPanel.close();
+        await source.close();
+      }
+    },
+  );
   await step('missing extraction scripts do not incorrectly ask for site permission', async () => {
     const scriptPath = path.join(extensionPath, 'content-scripts/extract.js');
     const script = await readFile(scriptPath);

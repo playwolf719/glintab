@@ -717,6 +717,7 @@
   }
   .conversation-tools {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 14px;
     margin: 0 0 9px;

@@ -7,6 +7,7 @@ import type {
   ChatGPTAuthFlow,
   Provider,
   Settings,
+  PageRefreshJob,
 } from '../../types';
 export interface StorageDriver {
   get(keys?: string | string[] | null): Promise<Record<string, unknown>>;
@@ -61,6 +62,19 @@ export class Repository {
   async conversation(key: string): Promise<Conversation | null> {
     const result = await this.driver.get(PREFIX + key);
     return (result[PREFIX + key] as Conversation) || null;
+  }
+  async refreshJob(tabId: number): Promise<PageRefreshJob | null> {
+    const key = 'page-refresh:' + tabId;
+    return ((await this.driver.get(key))[key] as PageRefreshJob) || null;
+  }
+  async refreshJobs(): Promise<PageRefreshJob[]> {
+    const all = await this.driver.get(null);
+    return Object.entries(all)
+      .filter(([key]) => key.startsWith('page-refresh:'))
+      .map(([, value]) => value as PageRefreshJob);
+  }
+  saveRefreshJob(job: PageRefreshJob) {
+    return this.write(() => this.driver.set({ ['page-refresh:' + job.tabId]: job }));
   }
   save(conversation: Conversation) {
     return this.write(async () => {

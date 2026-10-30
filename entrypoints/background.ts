@@ -4,6 +4,8 @@ import { errorText } from '../lib/platform/rpc';
 import { extractionInjectionError, providerOrigin } from '../lib/platform/permissions';
 import { isReadableUrl, pageKey } from '../lib/domain/page';
 import { summaryPrompt } from '../lib/domain/settings';
+import { PageRefreshManager, refreshPending } from '../lib/engine/page-refresh';
+import { reloadPage } from '../lib/platform/page-reload';
 import { validateReasoningEffort } from '../lib/domain/reasoning';
 import {
   AUDIO_ORIGINS,
@@ -238,8 +240,103 @@ export default defineBackground(() => {
         });
     });
   }
+  function startTask(request: Extract<Request, { type: 'task:start' }>) {
+    return serializeEngine(async () => {
+      const refresh = await authSession.refreshJob(request.tabId);
+      if (refreshPending(refresh) && refresh!.streamId !== request.streamId)
+        throw new Error('此页面正在刷新或重新读取，请稍候。');
+      const tab = await chrome.tabs.get(request.tabId);
+      if (pageKey(tab.url || '') !== request.conversation.source.pageKey)
+        throw new Error('来源页面已变化，请在当前页面重新发送。');
+      const config = await repository.config();
+      const provider = config.providers.find((p) => p.id === config.currentProviderId);
+      if (!provider) throw new Error('请先添加并选择 AI 供应商。');
+      await validateProvider(provider);
+      const question = request.summary
+        ? summaryPrompt({ ...request.conversation.source, url: tab.url || '' }, config.settings)
+        : request.question;
+      if (!question.trim()) throw new Error('请输入问题或在设置中填写摘要指令。');
+      const needsAudio = request.conversation.source.video?.transcription === 'required';
+      if (
+        needsAudio &&
+        (!config.transcription?.enabled || videoTarget(tab.url || '')?.platform !== 'bilibili')
+      )
+        throw new Error('当前分 P 没有字幕。请在设置 → 语音转写中配置并启用 B 站音轨转写。');
+      if (needsAudio) validateTranscription(config.transcription!);
+      if (!request.conversation.source.content.trim() && !needsAudio)
+        throw new Error('没有可用正文，请重新提取。');
+      return dispatchEngine({
+        target: 'engine',
+        type: 'start',
+        task: {
+          ...request,
+          question,
+          provider,
+          settings: config.settings,
+          transcription: needsAudio ? config.transcription : undefined,
+        },
+      });
+    });
+  }
+  const refresher = new PageRefreshManager(authSession, {
+    tab: (tabId) => chrome.tabs.get(tabId),
+    async validate() {
+      const config = await repository.config();
+      const provider = config.providers.find((item) => item.id === config.currentProviderId);
+      if (!provider) throw new Error('请先添加并选择 AI 供应商。');
+      await validateProvider(provider);
+    },
+    async snapshot(tabId, key) {
+      if (!(await chrome.offscreen.hasDocument())) return null;
+      return engine<TaskSnapshot | null>({
+        target: 'engine',
+        type: 'snapshot',
+        tabId,
+        pageKey: key,
+      });
+    },
+    reload: reloadPage,
+    async restore(job) {
+      if (job.mode !== 'drawer') return;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: job.tabId },
+          files: ['content-scripts/drawer.js'],
+        });
+        await chrome.tabs.sendMessage(job.tabId, { channel: 'glintab:drawer', open: true });
+      } catch {
+        await chrome.windows.create({
+          url: chrome.runtime.getURL('/sidepanel.html') + `?tabId=${job.tabId}&mode=window`,
+          type: 'popup',
+          width: 440,
+          height: 720,
+        });
+      }
+    },
+    extract,
+    async start(job, source) {
+      return (await startTask({
+        type: 'task:start',
+        tabId: job.tabId,
+        streamId: job.streamId,
+        question: '',
+        summary: true,
+        conversation: {
+          id: crypto.randomUUID(),
+          source,
+          messages: [],
+          updatedAt: Date.now(),
+          revision: '',
+        },
+      })) as TaskSnapshot;
+    },
+    stop: (tabId, streamId) => engine<void>({ target: 'engine', type: 'cancel', tabId, streamId }),
+  });
+  const refreshReady = refresher.recover();
+  void refreshReady.catch(() => {});
   async function handle(request: Request): Promise<unknown> {
     await authReady;
+    await refreshReady;
     switch (request.type) {
       case 'chatgpt:login:start': {
         const config = await repository.config();
@@ -350,40 +447,19 @@ export default defineBackground(() => {
         return repository.conversation(request.pageKey);
       case 'page:extract':
         return extract(request.tabId, request.expectedPageKey);
+      case 'page:refresh-summary':
+        if (
+          !Number.isInteger(request.tabId) ||
+          !['drawer', 'sidepanel', 'window'].includes(request.mode)
+        )
+          throw new Error('刷新请求无效。');
+        return refresher.start(request.tabId, request.expectedPageKey, request.mode);
+      case 'page:refresh-status':
+        return refresher.get(request.tabId, request.pageKey);
+      case 'page:refresh-cancel':
+        return refresher.cancel(request.tabId, request.refreshId);
       case 'task:start':
-        return serializeEngine(async () => {
-          const tab = await chrome.tabs.get(request.tabId);
-          if (pageKey(tab.url || '') !== request.conversation.source.pageKey)
-            throw new Error('来源页面已变化，请在当前页面重新发送。');
-          const config = await repository.config();
-          const provider = config.providers.find((p) => p.id === config.currentProviderId);
-          if (!provider) throw new Error('请先添加并选择 AI 供应商。');
-          await validateProvider(provider);
-          const question = request.summary
-            ? summaryPrompt({ ...request.conversation.source, url: tab.url || '' }, config.settings)
-            : request.question;
-          if (!question.trim()) throw new Error('请输入问题或在设置中填写摘要指令。');
-          const needsAudio = request.conversation.source.video?.transcription === 'required';
-          if (
-            needsAudio &&
-            (!config.transcription?.enabled || videoTarget(tab.url || '')?.platform !== 'bilibili')
-          )
-            throw new Error('当前分 P 没有字幕。请在设置 → 语音转写中配置并启用 B 站音轨转写。');
-          if (needsAudio) validateTranscription(config.transcription!);
-          if (!request.conversation.source.content.trim() && !needsAudio)
-            throw new Error('没有可用正文，请重新提取。');
-          return dispatchEngine({
-            target: 'engine',
-            type: 'start',
-            task: {
-              ...request,
-              question,
-              provider,
-              settings: config.settings,
-              transcription: needsAudio ? config.transcription : undefined,
-            },
-          });
-        });
+        return startTask(request);
       case 'task:snapshot':
         return engine({
           target: 'engine',
@@ -416,6 +492,7 @@ export default defineBackground(() => {
           .catch(() => {});
       case 'data:clear':
         return serializeEngine(async () => {
+          if (await refresher.active()) throw new Error('请先取消刷新摘要，再清除数据。');
           const tasks = await dispatchEngine<TaskSnapshot[]>({ target: 'engine', type: 'active' });
           if (tasks.length) throw new Error('请先停止所有页面的生成任务，再清除数据。');
           await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1001] });
@@ -574,6 +651,27 @@ export default defineBackground(() => {
       if (!extensionPage(sender, ['/sidepanel.html', '/options.html'])) {
         respond({ ok: false, error: '无权调用此接口。' });
         return;
+      }
+      if (
+        ['page:refresh-summary', 'page:refresh-status', 'page:refresh-cancel'].includes(
+          message.request?.type,
+        )
+      ) {
+        if (!extensionPage(sender, ['/sidepanel.html'])) {
+          respond({ ok: false, error: '仅聊天面板可发起页面刷新摘要。' });
+          return;
+        }
+        const caller = new URL(sender.url!);
+        const fixed = caller.searchParams.get('tabId');
+        const callerMode = caller.searchParams.get('mode');
+        const mode = callerMode === 'drawer' || callerMode === 'window' ? callerMode : 'sidepanel';
+        if (
+          (fixed !== null && Number(fixed) !== message.request.tabId) ||
+          (message.request.type === 'page:refresh-summary' && message.request.mode !== mode)
+        ) {
+          respond({ ok: false, error: '刷新请求与来源面板不匹配。' });
+          return;
+        }
       }
       if (
         (message.request?.type === 'chatgpt:auth:get' ||

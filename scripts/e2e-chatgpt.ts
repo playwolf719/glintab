@@ -188,18 +188,18 @@ try {
   expect(JSON.parse(authDocument).tokens.access_token).toBe(fixture.accessToken);
   const replacement = JSON.parse(authDocument);
   replacement.tokens.access_token = 'synthetic-manually-edited-access';
-  await options.evaluate((pasted) => {
-    (window as any).__authClipboard = '';
+  // A browser expression avoids tsx/esbuild's Node-only __name helper on nested callbacks.
+  // The embedded document contains synthetic fixture credentials only.
+  await options.evaluate(`
+    window.__authClipboard = '';
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
-        writeText: async (text: string) => {
-          (window as any).__authClipboard = text;
-        },
-        readText: async () => pasted,
+        writeText: async (text) => { window.__authClipboard = text; },
+        readText: async () => ${JSON.stringify(JSON.stringify(replacement))},
       },
     });
-  }, JSON.stringify(replacement));
+  `);
   await options.getByRole('button', { name: '复制 auth.json', exact: true }).click();
   expect(await options.evaluate(() => (window as any).__authClipboard)).toBe(authDocument);
   await options.getByRole('button', { name: '粘贴 auth.json', exact: true }).click();

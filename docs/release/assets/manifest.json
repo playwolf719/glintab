@@ -1,0 +1,59 @@
+{
+  "version": "0.1.0",
+  "browserVersion": "156.0.8078.4",
+  "publisher": {
+    "name": "playwolf719",
+    "email": "playwolf719@gmail.com",
+    "homepageUrl": null,
+    "privacyPolicyUrl": null,
+    "supportUrl": null
+  },
+  "productionManifestSha256": "f603fd127734a36cc4b4e046c6bf129b2c9a6ad38c4b1e6ec1b32bc53e92e15e",
+  "screenshotSource": "Production extension UI; original article; fixed local demo responses.",
+  "isolation": "Temporary browser profile and extension copy; loopback host permission only.",
+  "realModelOrVideoPlatformVerified": false,
+  "files": [
+    {
+      "file": "icon-128.png",
+      "width": 128,
+      "height": 128,
+      "sha256": "1c1f3bcdb4b21438b305e9bd11719a17ad83ca8fed951b908c9080dcce9d7cdd"
+    },
+    {
+      "file": "01-reading-summary.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "99b3b176c10d20f067e4dcb083cb8241d0c68decea4378f850f4436aca2bb699"
+    },
+    {
+      "file": "02-follow-up.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "67d498a421515a0cb7cb9d7b6c63b54347270b9e2853a482870bed12ee61d1c1"
+    },
+    {
+      "file": "03-source-inspection.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "e4dffdf199a968639af25b8c58a32d7032980c1dae79877a3ed231cdb1939e8b"
+    },
+    {
+      "file": "04-summary-prompts.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "520d33621a63aa6ac189296e65a770c2e59173beaf797228382201b05d02d0a7"
+    },
+    {
+      "file": "promo-small-440x280.png",
+      "width": 440,
+      "height": 280,
+      "sha256": "697a7c000b7a66618b7e4deb353440b6c824f1b55c79b5b638f85d44ebfaaa68"
+    },
+    {
+      "file": "promo-marquee-1400x560.png",
+      "width": 1400,
+      "height": 560,
+      "sha256": "ea6089364a0507a6701cd3adbaf64e448fa1329c54f119e7142beb49a1c15a29"
+    }
+  ]
+}

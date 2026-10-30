@@ -11,6 +11,8 @@
     "dev": "wxt",
     "build": "wxt build && node scripts/verify-package.mjs",
     "zip": "wxt zip && node scripts/verify-package.mjs",
+    "release:materials": "node scripts/prepare-release.mjs",
+    "release:demo": "node scripts/prepare-release.mjs --serve-demo",
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

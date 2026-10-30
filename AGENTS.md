@@ -1,6 +1,6 @@
 # Glintab 开发约定
 
-- 开始变更前阅读 `README.md` 和 `docs/ARCHITECTURE.md`，保留原始 `REBUILD_GUIDE_ZH.md`。
+- 开始变更前阅读 `README.md` 和 `docs/ARCHITECTURE.md`。
 - 技术栈：WXT / Manifest V3 / React / TypeScript。默认中文界面，设备本地存储。
 - `entrypoints` 只协调浏览器上下文；规则放 `lib/domain`，提取器放 `lib/extraction`，协议放 `lib/llm`，任务放 `lib/engine`。
 - 配置和会话的存储写入经 background 的 `Repository` 完成；抽屉宽度等宿主数据也只由后台写入。不要在 UI 或 offscreen 中直接写 storage。

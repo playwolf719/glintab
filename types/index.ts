@@ -127,6 +127,17 @@ export interface EngineEvent {
   snapshot: TaskSnapshot;
   persist: boolean;
 }
+export interface PageRefreshJob {
+  id: string;
+  streamId: string;
+  tabId: number;
+  pageKey: string;
+  mode: 'drawer' | 'sidepanel' | 'window';
+  status: 'refreshing' | 'extracting' | 'starting' | 'started' | 'error' | 'cancelled';
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+}
 export type Request =
   | { type: 'chatgpt:login:start'; providerId?: string }
   | { type: 'chatgpt:login:status'; flowId: string; statusKey: string }
@@ -147,6 +158,14 @@ export type Request =
   | { type: 'transcription:save'; config: TranscriptionConfig }
   | { type: 'models:list'; provider: Provider }
   | { type: 'page:extract'; tabId: number; expectedPageKey: string }
+  | {
+      type: 'page:refresh-summary';
+      tabId: number;
+      expectedPageKey: string;
+      mode: PageRefreshJob['mode'];
+    }
+  | { type: 'page:refresh-status'; tabId: number; pageKey: string }
+  | { type: 'page:refresh-cancel'; tabId: number; refreshId: string }
   | { type: 'conversation:get'; pageKey: string }
   | {
       type: 'task:start';

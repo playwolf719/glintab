@@ -299,30 +299,50 @@ export default function App() {
         )}
       </main>
       <div className="composer-area">
-        {hasMessages && !chat.busy && (
-          <div className="conversation-tools">
-            <button className="text-link" onClick={() => void summarize()}>
-              <RefreshCw size={12} />
-              重新摘要
-            </button>
-            {source?.content && config.settings.showContent && (
-              <button className="text-link" onClick={() => setViewContent(true)}>
-                <FileText size={12} />
-                {source.video?.transcription ? '查看转写' : source.video ? '查看字幕' : '查看正文'}
+        <div className="conversation-tools">
+          <button
+            className="text-link"
+            title="刷新来源网页，重新读取内容并生成摘要；会替换当前页面的对话"
+            disabled={chat.busy || !currentProvider || !readable}
+            onClick={() => {
+              stickToBottom.current = true;
+              void chat.refreshAndSummarize();
+            }}
+          >
+            <RefreshCw size={12} />
+            刷新页面并摘要
+          </button>
+          {hasMessages && !chat.busy && (
+            <>
+              <button className="text-link" onClick={() => void summarize()}>
+                <RefreshCw size={12} />
+                重新摘要
               </button>
-            )}
-          </div>
-        )}
+              {source?.content && config.settings.showContent && (
+                <button className="text-link" onClick={() => setViewContent(true)}>
+                  <FileText size={12} />
+                  {source.video?.transcription
+                    ? '查看转写'
+                    : source.video
+                      ? '查看字幕'
+                      : '查看正文'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
         {chat.busy && chat.phase !== 'loading' && (
           <div className="generation-status" role="status">
             <span className="status-dot" />
-            {chat.phase === 'extracting'
-              ? isVideo
-                ? '正在提取视频字幕…'
-                : '正在提取网页正文…'
-              : chat.phase === 'starting'
-                ? '正在启动模型…'
-                : chat.progress || '正在生成回答，关闭面板后仍会继续'}
+            {chat.phase === 'refreshing'
+              ? chat.progress || '正在刷新页面…'
+              : chat.phase === 'extracting'
+                ? isVideo
+                  ? '正在提取视频字幕…'
+                  : '正在提取网页正文…'
+                : chat.phase === 'starting'
+                  ? '正在启动模型…'
+                  : chat.progress || '正在生成回答，关闭面板后仍会继续'}
           </div>
         )}
         {editId && (
@@ -387,11 +407,11 @@ export default function App() {
               </select>
               <ChevronDown size={12} />
             </div>
-            {chat.phase === 'running' ? (
+            {chat.phase === 'running' || chat.phase === 'refreshing' ? (
               <button
                 className="send-button stop"
-                aria-label="停止生成"
-                title="停止生成"
+                aria-label={chat.phase === 'refreshing' ? '取消刷新摘要' : '停止生成'}
+                title={chat.phase === 'refreshing' ? '取消刷新后的摘要' : '停止生成'}
                 onClick={() => void chat.stop()}
               >
                 <Square size={14} fill="currentColor" />
