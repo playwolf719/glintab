@@ -23,6 +23,7 @@ manifest.host_permissions = [
   ...new Set([
     ...(manifest.host_permissions || []),
     'http://127.0.0.1/*',
+    'https://36kr.com/*',
     'https://www.youtube.com/*',
     'https://www.bilibili.com/*',
     'https://*.bilivideo.com/*',
@@ -268,6 +269,57 @@ try {
     await expect(panel.getByRole('dialog')).toContainText('Reading principle');
     await panel.keyboard.press('Escape');
     await expect(panel.getByRole('dialog')).toHaveCount(0);
+  });
+  await step('36kr homepage keeps the loaded feed and rejects verification pages', async () => {
+    const url = 'https://36kr.com/';
+    let verification = false;
+    await context.route(url, (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: verification
+          ? '<title>网站验证</title><p>正在进行安全检测，为保障您的访问安全，系统正在检测当前网络环境，该过程通常需要几秒钟，请耐心等待。</p>'
+          : `<title>首页列表验收</title><nav>导航噪音</nav><div class="kr-home-flow"><div>最新文章</div><p><a class="article-item-title" href="/p/1001?from=home&amp;ref=">机器人新闻的独立证据</a></p><p>首篇文章的摘要文字。</p><p><a class="article-item-title" href="/p/1002">算力建设的独立证据</a></p><p>第二篇文章的摘要文字。</p></div><div class="kr-home-column"><p>${'侧栏快讯噪音。'.repeat(80)}</p></div>`,
+      }),
+    );
+    const source = await context.newPage();
+    await source.goto(url);
+    const sourceTabId = await worker.evaluate(
+      async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id,
+      url,
+    );
+    const feedPanel = await openPanel(sourceTabId);
+    try {
+      await feedPanel.getByRole('button', { name: '帮我总结这篇网页' }).click();
+      await expect(feedPanel.locator('.message.assistant').last()).toContainText('保留独立思考。');
+      const system = requests.at(-1).messages[0].content;
+      expect(system).toContain('机器人新闻的独立证据');
+      expect(system).toContain('算力建设的独立证据');
+      expect(system).toContain('第二篇文章的摘要文字');
+      expect(system).toContain('https://36kr.com/p/1001?from=home&ref=');
+      expect(system).not.toContain('侧栏快讯噪音');
+      expect(system).not.toContain('导航噪音');
+      await feedPanel.getByRole('button', { name: '查看正文' }).click();
+      await expect(feedPanel.getByRole('dialog')).toContainText('算力建设的独立证据');
+      await feedPanel.keyboard.press('Escape');
+      verification = true;
+      await source.reload();
+      const before = requests.length;
+      const result = await feedPanel.evaluate(
+        async ({ tabId, url }) =>
+          chrome.runtime.sendMessage({
+            channel: 'glintab:rpc',
+            request: { type: 'page:extract', tabId, expectedPageKey: url },
+          }),
+        { tabId: sourceTabId, url },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain('未找到 36 氪首页文章列表');
+      expect(requests.length).toBe(before);
+    } finally {
+      await feedPanel.close();
+      await source.close();
+      await context.unroute(url);
+    }
   });
   await step(
     'YouTube captions cross MAIN world, background and worker with timestamp citations',

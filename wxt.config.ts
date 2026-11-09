@@ -5,7 +5,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'Glintab · 网页阅读助手',
-    description: '用自己的 AI 模型，理解当前网页、提炼重点并持续追问。数据保存在本机。',
+    description: '用自己的 AI 模型，理解网页或视频、提炼重点并持续追问。数据保存在本机。',
     minimum_chrome_version: '116',
     permissions: [
       'storage',

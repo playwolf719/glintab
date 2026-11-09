@@ -1,6 +1,7 @@
 // Extraction adapters live behind this boundary. Add video/PDF adapters here,
 // keeping their platform-specific permissions and lifecycle out of the UI.
 import { videoTarget } from '../domain/video';
+import { is36KrHome } from './36kr';
 
 export interface ExtractorRegistration {
   id: string;
@@ -8,6 +9,11 @@ export interface ExtractorRegistration {
   script: string;
 }
 export const extractors: ExtractorRegistration[] = [
+  {
+    id: '36kr-home',
+    matches: is36KrHome,
+    script: '/content-scripts/extract.js',
+  },
   {
     id: 'web',
     matches: (url) => ['http:', 'https:'].includes(url.protocol),

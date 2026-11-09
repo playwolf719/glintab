@@ -2,6 +2,7 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { pageKey } from '../domain/page';
+import { is36KrHome, select36KrHomeContent } from './36kr';
 import type { PageSource } from '../../types';
 
 function prepareLinks(root: ParentNode, url: string) {
@@ -33,13 +34,17 @@ function prepareLinks(root: ParentNode, url: string) {
 
 export function extractWeb(doc: Document, url: string): PageSource {
   const clone = doc.cloneNode(true) as Document;
+  const isHomeFeed = is36KrHome(new URL(url));
+  // Readability scores individual prose blocks and can select one sidebar flash
+  // instead of the homepage's linked article list. Keep the loaded feed intact.
+  if (isHomeFeed) clone.body.replaceChildren(select36KrHomeContent(clone));
   clone
     .querySelectorAll(
       'script,style,iframe,noscript,svg,canvas,nav,footer,aside,[data-glintab-host]',
     )
     .forEach((el) => el.remove());
   prepareLinks(clone, url);
-  const article = new Readability(clone.cloneNode(true) as Document).parse();
+  const article = isHomeFeed ? null : new Readability(clone.cloneNode(true) as Document).parse();
   const container = doc.createElement('div');
   container.innerHTML = article?.content || clone.body.innerHTML;
   prepareLinks(container, url);
@@ -53,7 +58,7 @@ export function extractWeb(doc: Document, url: string): PageSource {
     },
   });
   let text = converter.turndown(container.innerHTML).trim();
-  let fallback = !article || text.length < 40;
+  const fallback = !isHomeFeed && (!article || text.length < 40);
   if (text.length < 40) text = converter.turndown(clone.body.innerHTML).trim();
   if (text.length < 40) text = (clone.body.textContent || '').replace(/\s+/g, ' ').trim();
   if (text.length < 40) throw new Error('当前页面没有足够的可读正文，请等待加载完成后重试。');
