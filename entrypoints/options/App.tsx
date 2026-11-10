@@ -99,7 +99,7 @@ export default function App() {
             <ShieldCheck size={15} />
             <span>本地优先 · 自备密钥</span>
           </div>
-          <span>Glintab v0.1.0</span>
+          <span>Glintab v{chrome.runtime.getManifest().version}</span>
         </div>
       </aside>
       <main className="settings-main">
