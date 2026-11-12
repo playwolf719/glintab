@@ -68,7 +68,7 @@
 
 需要 **Chrome 116+**。Glintab 已上线 Chrome 应用商店，可直接安装：
 
-1. 前往 [Glintab · 网页阅读助手](https://chromewebstore.google.com/detail/kcgimehlklmemfmbhocejoongjpgljog)，点击「添加至 Chrome」。
+1. 前往 [Glintab · 网页阅读助手](https://chromewebstore.google.com/detail/kcgimehlklmemfmbhocejoongjpgljog)，或打开 [Chrome 应用商店](https://chromewebstore.google.com) 搜索 `glintab`，找到扩展后点击「添加至 Chrome」。
 2. 打开扩展的「详细信息 → 扩展程序选项」，添加模型供应商，填写连接信息和模型，点击「保存并授权」。
 3. 打开一篇普通网页，点击工具栏中的 Glintab 图标，选择「帮我总结这篇网页」，或直接输入问题。
 
