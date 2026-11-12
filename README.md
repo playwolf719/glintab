@@ -5,6 +5,7 @@
   <p>用自己的 AI 模型，在网页旁提炼重点、核对原文、继续追问。</p>
   <p>中文优先 · 自选模型 · 本地保存</p>
   <p>
+    <a href="https://chromewebstore.google.com/detail/kcgimehlklmemfmbhocejoongjpgljog">Chrome 应用商店安装</a> ·
     <a href="#快速开始">快速开始</a> ·
     <a href="docs/USAGE.md">使用指南</a> ·
     <a href="docs/PRIVACY.md">隐私说明</a> ·
@@ -65,7 +66,17 @@
 
 ## 快速开始
 
-需要 **Chrome 116+**；从源码构建需要 **Node.js 22.12+**，推荐 Node.js 22 LTS。目前可通过开发者模式安装。
+需要 **Chrome 116+**。Glintab 已上线 Chrome 应用商店，可直接安装：
+
+1. 前往 [Glintab · 网页阅读助手](https://chromewebstore.google.com/detail/kcgimehlklmemfmbhocejoongjpgljog)，点击「添加至 Chrome」。
+2. 打开扩展的「详细信息 → 扩展程序选项」，添加模型供应商，填写连接信息和模型，点击「保存并授权」。
+3. 打开一篇普通网页，点击工具栏中的 Glintab 图标，选择「帮我总结这篇网页」，或直接输入问题。
+
+如提示缺少网页读取权限，可选择「仅授权当前网站」，或自行选择「一次授权所有网站」。网页读取与模型服务的域名权限分别授权。
+
+### 从源码安装
+
+从源码构建需要 **Node.js 22.12+**，推荐 Node.js 22 LTS。
 
 ```bash
 git clone https://github.com/playwolf719/glintab.git
@@ -76,10 +87,7 @@ npm run build
 
 1. 打开 `chrome://extensions`，启用「开发者模式」。
 2. 点击「加载已解压的扩展程序」，选择项目中的 **`output/chrome-mv3`** 目录。
-3. 打开扩展的「详细信息 → 扩展程序选项」，添加模型供应商，填写连接信息和模型，点击「保存并授权」。
-4. 打开一篇普通网页，点击工具栏中的 Glintab 图标，选择「帮我总结这篇网页」，或直接输入问题。
-
-如提示缺少网页读取权限，可选择「仅授权当前网站」，或自行选择「一次授权所有网站」。网页读取与模型服务的域名权限分别授权。
+3. 按上方快速开始的步骤配置模型并开始使用。
 
 需要分发包时运行 `npm run zip`，产物在 `output/`；更新代码后重新构建，并在扩展管理页点击「重新加载」。完整步骤见 [安装与使用指南](docs/USAGE.md#安装使用)。
 
